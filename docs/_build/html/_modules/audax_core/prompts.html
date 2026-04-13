@@ -1,0 +1,638 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" data-theme="light">
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>audax_core.prompts &#8212; Audax Documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "light";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "light";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=36d52039" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../../_static/documentation_options.js?v=3b16c9ca"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=fd10adb8"></script>
+    <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = '_modules/audax_core/prompts';</script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+    <meta name="docbuild:last-update" content="Apr 13, 2026"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="light">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+<aside class="bd-header-announcement" aria-label="Announcement">
+  <div class="bd-header-announcement__content">Mission-driven orchestration for Claude and Codex with locked specs, structured reviews, and real repository state checks.</div>
+</aside>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+  
+    <p class="title logo__title">Audax</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../getting-started.html">
+    Getting Started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../workflow.html">
+    Workflow
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../architecture.html">
+    Architecture
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../cli-reference.html">
+    CLI Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../getting-started.html">
+    Getting Started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../workflow.html">
+    Workflow
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../architecture.html">
+    Architecture
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../cli-reference.html">
+    CLI Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../index.html" class="nav-link">Module code</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">audax_core.prompts</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <h1>Source code for audax_core.prompts</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Prompt builders for spec drafting, implementation, and review rounds.&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">textwrap</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">LockedMissionSpec</span>
+
+
+<div class="viewcode-block" id="build_mission_spec_prompt">
+<a class="viewcode-back" href="../../api.html#audax_core.prompts.build_mission_spec_prompt">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_mission_spec_prompt</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">task</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">repo_context</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">current_spec</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">pending_feedback</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct the Claude prompt used to draft or revise ``mission_spec.md``.&quot;&quot;&quot;</span>
+    <span class="n">mode_instructions</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">&quot;Create a new draft for mission_spec.md.&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">current_spec</span>
+        <span class="k">else</span> <span class="s2">&quot;Revise the existing mission_spec.md draft.&quot;</span>
+    <span class="p">)</span>
+    <span class="n">current_block</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">current_spec</span>
+        <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Existing mission_spec.md draft:</span><span class="se">\n</span><span class="si">{</span><span class="n">current_spec</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span>
+    <span class="p">)</span>
+    <span class="n">feedback_block</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Feedback to address:</span><span class="se">\n</span><span class="s2">None.</span><span class="se">\n</span><span class="s2">&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">pending_feedback</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+        <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Feedback to address:</span><span class="se">\n</span><span class="si">{</span><span class="n">pending_feedback</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">textwrap</span><span class="o">.</span><span class="n">dedent</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        You are preparing mission_spec.md for an autonomous coding mission.</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">mode_instructions</span><span class="si">}</span>
+
+<span class="s2">        Original user request:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">task</span><span class="si">}</span>
+
+<span class="s2">        Repo policy context:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">repo_context</span><span class="si">}</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">current_block</span><span class="si">}</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">feedback_block</span><span class="si">}</span>
+<span class="s2">        Write markdown only for mission_spec.md. Use these sections exactly:</span>
+<span class="s2">        1. Mission</span>
+<span class="s2">        2. Mission Success Criteria</span>
+<span class="s2">        3. Required Behaviors</span>
+<span class="s2">        4. Test Plan</span>
+<span class="s2">        5. Constraints And Non-Goals</span>
+
+<span class="s2">        Rules:</span>
+<span class="s2">        - Every requirement must be falsifiable and observable.</span>
+<span class="s2">        - When the request is ambiguous, prefer the more audacious interpretation.</span>
+<span class="s2">        - The Test Plan must directly prove or falsify the success criteria.</span>
+<span class="s2">        - Capture the spirit of the user request, not just the narrowest wording.</span>
+<span class="s2">        - Do not include meta commentary, chain-of-thought, or explanations outside the markdown file.</span>
+<span class="s2">        &quot;&quot;&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="build_mission_review_prompt">
+<a class="viewcode-back" href="../../api.html#audax_core.prompts.build_mission_review_prompt">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_mission_review_prompt</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">task</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">repo_context</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">mission_spec</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct the Codex review prompt for a drafted mission spec.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">textwrap</span><span class="o">.</span><span class="n">dedent</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        Review the draft mission_spec.md against the original user request and repo policy context.</span>
+
+<span class="s2">        Original user request:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">task</span><span class="si">}</span>
+
+<span class="s2">        Repo policy context:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">repo_context</span><span class="si">}</span>
+
+<span class="s2">        Draft mission_spec.md:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">mission_spec</span><span class="si">}</span>
+
+<span class="s2">        Return JSON only.</span>
+
+<span class="s2">        Approval standard:</span>
+<span class="s2">        - Approve only if the spec fully captures the spirit of the user request.</span>
+<span class="s2">        - Approve only if each success criterion is falsifiable and concrete.</span>
+<span class="s2">        - Approve only if the Test Plan can actually verify the mission.</span>
+<span class="s2">        - When the spec is underspecified, prefer rejecting it and asking for the more audacious version.</span>
+
+<span class="s2">        Every issue should explain what is missing or too weak and how to strengthen it.</span>
+<span class="s2">        &quot;&quot;&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="build_implementation_prompt">
+<a class="viewcode-back" href="../../api.html#audax_core.prompts.build_implementation_prompt">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_implementation_prompt</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">task</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">repo_context</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">mission_spec</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">mission_pdf_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span>
+    <span class="n">locked_spec</span><span class="p">:</span> <span class="n">LockedMissionSpec</span><span class="p">,</span>
+    <span class="n">review_feedback</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct the Claude prompt for an implementation round.&quot;&quot;&quot;</span>
+    <span class="n">feedback_block</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">&quot;No outstanding reviewer feedback.&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">review_feedback</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+        <span class="k">else</span> <span class="n">review_feedback</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">textwrap</span><span class="o">.</span><span class="n">dedent</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        You are implementing an immutable mission in the current repository.</span>
+
+<span class="s2">        Original user request:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">task</span><span class="si">}</span>
+
+<span class="s2">        Locked mission spec:</span>
+<span class="s2">        - Markdown path: </span><span class="si">{</span><span class="n">mission_pdf_path</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s1">&#39;.md&#39;</span><span class="p">)</span><span class="si">}</span>
+<span class="s2">        - PDF path: </span><span class="si">{</span><span class="n">mission_pdf_path</span><span class="si">}</span>
+<span class="s2">        - Mission markdown sha256: </span><span class="si">{</span><span class="n">locked_spec</span><span class="o">.</span><span class="n">markdown_sha256</span><span class="si">}</span>
+<span class="s2">        - Mission PDF sha256: </span><span class="si">{</span><span class="n">locked_spec</span><span class="o">.</span><span class="n">pdf_sha256</span><span class="si">}</span>
+
+<span class="s2">        The mission spec is locked. Do not modify mission_spec.md, mission_spec.pdf, or mission_spec.lock.json.</span>
+
+<span class="s2">        Repo policy context:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">repo_context</span><span class="si">}</span>
+
+<span class="s2">        Locked mission_spec.md contents:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">mission_spec</span><span class="si">}</span>
+
+<span class="s2">        Reviewer feedback to address:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">feedback_block</span><span class="si">}</span>
+
+<span class="s2">        Instructions:</span>
+<span class="s2">        - Implement all remaining mission requirements directly in the repository.</span>
+<span class="s2">        - Respect repo rules such as tests, documentation, and synchronization requirements.</span>
+<span class="s2">        - Run the relevant tests or checks when possible.</span>
+<span class="s2">        - Return a concise markdown summary with these sections exactly:</span>
+<span class="s2">          - Accomplished</span>
+<span class="s2">          - Tests Run</span>
+<span class="s2">          - Remaining Risks</span>
+<span class="s2">        &quot;&quot;&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="build_implementation_review_prompt">
+<a class="viewcode-back" href="../../api.html#audax_core.prompts.build_implementation_review_prompt">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_implementation_review_prompt</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">task</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">repo_context</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">mission_spec</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">mission_pdf_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span>
+    <span class="n">claude_summary</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">locked_spec</span><span class="p">:</span> <span class="n">LockedMissionSpec</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct the Codex review prompt for the current repository state.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">textwrap</span><span class="o">.</span><span class="n">dedent</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        Review the current repository state against the locked mission spec and repo policy context.</span>
+<span class="s2">        Inspect the repository directly. Do not rely only on Claude&#39;s summary.</span>
+
+<span class="s2">        Original user request:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">task</span><span class="si">}</span>
+
+<span class="s2">        Locked mission spec:</span>
+<span class="s2">        - Markdown path: </span><span class="si">{</span><span class="n">mission_pdf_path</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s1">&#39;.md&#39;</span><span class="p">)</span><span class="si">}</span>
+<span class="s2">        - PDF path: </span><span class="si">{</span><span class="n">mission_pdf_path</span><span class="si">}</span>
+<span class="s2">        - Mission markdown sha256: </span><span class="si">{</span><span class="n">locked_spec</span><span class="o">.</span><span class="n">markdown_sha256</span><span class="si">}</span>
+<span class="s2">        - Mission PDF sha256: </span><span class="si">{</span><span class="n">locked_spec</span><span class="o">.</span><span class="n">pdf_sha256</span><span class="si">}</span>
+
+<span class="s2">        Repo policy context:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">repo_context</span><span class="si">}</span>
+
+<span class="s2">        Locked mission_spec.md contents:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">mission_spec</span><span class="si">}</span>
+
+<span class="s2">        Claude implementation summary:</span>
+<span class="s2">        </span><span class="si">{</span><span class="n">claude_summary</span><span class="si">}</span>
+
+<span class="s2">        Return JSON only.</span>
+
+<span class="s2">        Review standard:</span>
+<span class="s2">        - mission_accomplished is true only if the mission spec is fully satisfied.</span>
+<span class="s2">        - has_issues is true if there is any bug, missing requirement, repo policy violation, or testing gap.</span>
+<span class="s2">        - Use issue categories such as bug, missing_requirement, repo_policy, or test_gap.</span>
+<span class="s2">        - If the implementation is clean but incomplete, still report issues and set mission_accomplished to false.</span>
+<span class="s2">        &quot;&quot;&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span></div>
+
+</pre></div>
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2026, Audax contributors.
+      <br/>
+    
+  </p>
+</div>
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    <br/>
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.16.1.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>

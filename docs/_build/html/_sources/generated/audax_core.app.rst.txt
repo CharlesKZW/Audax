@@ -1,0 +1,15 @@
+﻿audax\_core.app
+===============
+
+.. automodule:: audax_core.app
+
+   
+   .. rubric:: Functions
+
+   .. autosummary::
+   
+      ensure_cli_available
+      main
+      parse_args
+      read_task
+   
