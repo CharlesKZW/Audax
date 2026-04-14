@@ -11,6 +11,7 @@ import shutil
 import sys
 
 from .artifacts import assert_mission_spec_locked
+from .auto_commit import AutoCommitter
 from .backends import (
     CLAUDE_INCLUDE_PARTIAL_MESSAGES,
     CLAUDE_INPUT_FORMAT,
@@ -76,6 +77,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--claude-cmd", default=CLAUDE_CMD)
     parser.add_argument("--codex-cmd", default=CODEX_CMD)
+    parser.add_argument(
+        "--auto-commit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Commit repository changes after each implementation round. "
+            "Enabled by default; skipped silently when the repo is not a "
+            "git repository."
+        ),
+    )
+    parser.add_argument(
+        "--session-branch",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Check out a dedicated ``audax/<session_id>`` branch at session "
+            "start and commit rounds onto it. Off by default; auto-commit "
+            "lands on the current branch."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -113,6 +134,16 @@ def parse_continue_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--claude-cmd", default=CLAUDE_CMD)
     parser.add_argument("--codex-cmd", default=CODEX_CMD)
+    parser.add_argument(
+        "--auto-commit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--session-branch",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     return parser.parse_args(argv)
 
 
@@ -177,6 +208,14 @@ def build_startup_card_info_lines(
         ),
         f"--claude-cmd: {getattr(args, 'claude_cmd', CLAUDE_CMD)}",
         f"--codex-cmd: {getattr(args, 'codex_cmd', CODEX_CMD)}",
+        (
+            "--auto-commit/--no-auto-commit: "
+            f"{'enabled' if getattr(args, 'auto_commit', True) else 'disabled'}"
+        ),
+        (
+            "--session-branch/--no-session-branch: "
+            f"{'enabled' if getattr(args, 'session_branch', False) else 'disabled'}"
+        ),
         "",
         "Claude runtime selected by Audax:",
         f"model: {_describe_optional_setting(CLAUDE_MODEL)}",
@@ -284,10 +323,16 @@ def run_main(argv: list[str]) -> int:
                 codex_cmd=args.codex_cmd,
             )
             artifacts = MissionArtifacts.from_workspace(workspace_dir)
+            auto_committer = AutoCommitter(
+                repo_root=repo_root,
+                enabled=args.auto_commit,
+                use_session_branch=args.session_branch,
+            )
             orchestrator = _build_orchestrator(
                 config=config,
                 artifacts=artifacts,
                 repo_root=repo_root,
+                auto_committer=auto_committer,
             )
             result = orchestrator.run(task)
             print(
@@ -365,10 +410,16 @@ def continue_main(argv: list[str]) -> int:
                 claude_cmd=args.claude_cmd,
                 codex_cmd=args.codex_cmd,
             )
+            auto_committer = AutoCommitter(
+                repo_root=repo_root,
+                enabled=args.auto_commit,
+                use_session_branch=args.session_branch,
+            )
             orchestrator = _build_orchestrator(
                 config=config,
                 artifacts=artifacts,
                 repo_root=repo_root,
+                auto_committer=auto_committer,
             )
             print(f"Resuming session {session_id} with task: {task}")
             result = orchestrator.resume(task, locked_spec)
@@ -391,6 +442,7 @@ def _build_orchestrator(
     config: LoopConfig,
     artifacts: MissionArtifacts,
     repo_root: Path,
+    auto_committer: AutoCommitter | None = None,
 ) -> ReviewLoopOrchestrator:
     process_runner = QuietProcessRunner(
         heartbeat_seconds=config.heartbeat_seconds,
@@ -401,6 +453,7 @@ def _build_orchestrator(
         artifacts=artifacts,
         claude=ClaudeCLI(config.claude_cmd, process_runner, repo_root),
         codex=CodexCLI(config.codex_cmd, process_runner, repo_root),
+        auto_committer=auto_committer,
     )
 
 

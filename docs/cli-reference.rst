@@ -55,6 +55,21 @@ Arguments And Options
    Override the Codex CLI executable name or path. Defaults to ``codex`` or the
    ``CODEX_CMD`` environment variable when set.
 
+``--auto-commit`` / ``--no-auto-commit``
+   Commit repository changes after each implementation round. **Enabled by
+   default.** The orchestrator runs ``git add -A`` followed by ``git commit``
+   with a deterministic message: title ``audax round <N>: <first line of
+   Accomplished>`` and trailer lines ``Audax-Session: <id>`` and
+   ``Audax-Round: <N>``. If the target directory is not a git repository,
+   auto-commit is skipped with a single log line. If the round produced no
+   repo changes, the commit is skipped too.
+
+``--session-branch`` / ``--no-session-branch``
+   Check out a fresh ``audax/<session_id>`` branch at session start and
+   commit rounds onto it. **Off by default** (commits land on the current
+   branch). Useful as a lightweight isolation story — merge the branch back
+   with ``git merge audax/<session_id>`` when satisfied, or delete it.
+
 Examples
 --------
 
@@ -114,6 +129,16 @@ resume to fail fast.
 
 ``--claude-cmd`` / ``--codex-cmd``
    Override the backend CLI executables.
+
+``--auto-commit`` / ``--no-auto-commit``
+   Same semantics as the fresh-run flag. Enabled by default; resume
+   continues committing rounds onto the current branch.
+
+``--session-branch`` / ``--no-session-branch``
+   Same semantics as the fresh-run flag. Off by default. If the branch
+   already exists from the original session, pass ``--session-branch`` on
+   resume only if you have manually re-checked-out that branch; otherwise
+   just leave auto-commit on the current branch.
 
 Drafting and approval are skipped on resume; only the implementation loop
 runs. New prompt and output artifacts are written into the existing session

@@ -1455,6 +1455,233 @@ def test_claude_as_reviewer_missing_required_field_raises_runtime_error(tmp_path
         _parse_json_text('{"approved": true}', schema, label="x")
 
 
+def _init_git_repo(repo_root: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"],
+        cwd=repo_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "audax-test@example.com"],
+        cwd=repo_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Audax Test"],
+        cwd=repo_root,
+        check=True,
+    )
+    (repo_root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "seed.txt"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "initial commit"],
+        cwd=repo_root,
+        check=True,
+    )
+
+
+def test_auto_committer_commits_changes_on_current_branch(tmp_path: Path) -> None:
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+
+    committer = AutoCommitter(
+        repo_root=repo_root,
+        enabled=True,
+        use_session_branch=False,
+    )
+    start = committer.start_session("20260414T000000Z_pid1")
+    assert start.status == "on_current_branch"
+
+    (repo_root / "feature.py").write_text("print('hello')\n", encoding="utf-8")
+    outcome = committer.commit_round(
+        round_num=1,
+        session_id="20260414T000000Z_pid1",
+        implementer_summary=(
+            "## Accomplished\n- Added feature.py with hello print\n- Wired it up\n\n"
+            "## Tests Run\n- pytest -q\n\n## Remaining Risks\n- None\n"
+        ),
+    )
+    assert outcome.status == "committed"
+    assert outcome.sha
+    assert "audax round 1: Added feature.py with hello print" in outcome.message
+    assert "Audax-Session: 20260414T000000Z_pid1" in outcome.message
+    assert "Audax-Round: 1" in outcome.message
+
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%B"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "Added feature.py with hello print" in log
+    assert "Audax-Round: 1" in log
+
+
+def test_auto_committer_creates_session_branch(tmp_path: Path) -> None:
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+
+    committer = AutoCommitter(
+        repo_root=repo_root,
+        enabled=True,
+        use_session_branch=True,
+    )
+    outcome = committer.start_session("20260414T000000Z_pid1")
+    assert outcome.status == "branch_created"
+    assert outcome.branch == "audax/20260414T000000Z_pid1"
+
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert branch == "audax/20260414T000000Z_pid1"
+
+
+def test_auto_committer_skips_when_not_git_repo(tmp_path: Path) -> None:
+    from audax_core.auto_commit import AutoCommitter
+
+    committer = AutoCommitter(repo_root=tmp_path, enabled=True)
+    outcome = committer.start_session("s1")
+    assert outcome.status == "not_a_repo"
+    # Round commits should no-op cleanly.
+    commit_outcome = committer.commit_round(
+        round_num=1,
+        session_id="s1",
+        implementer_summary="## Accomplished\n- nope\n",
+    )
+    assert commit_outcome.status == "inactive"
+
+
+def test_auto_committer_skips_when_disabled(tmp_path: Path) -> None:
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+    committer = AutoCommitter(repo_root=repo_root, enabled=False)
+    assert committer.start_session("s1").status == "disabled"
+    assert committer.commit_round(
+        round_num=1, session_id="s1", implementer_summary="x",
+    ).status == "inactive"
+
+
+def test_auto_committer_reports_no_changes_to_commit(tmp_path: Path) -> None:
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+
+    committer = AutoCommitter(
+        repo_root=repo_root, enabled=True, use_session_branch=False,
+    )
+    committer.start_session("s1")
+    # No file changes since init; commit should be a no-op.
+    outcome = committer.commit_round(
+        round_num=1, session_id="s1", implementer_summary="## Accomplished\n- Nothing\n",
+    )
+    assert outcome.status == "no_changes"
+
+
+def test_orchestrator_auto_commits_each_implementation_round(tmp_path: Path) -> None:
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path
+    _init_git_repo(repo_root)
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    claude = FakeClaude(
+        [
+            "# Mission\nShip\n\n## Mission Success Criteria\n- A\n\n"
+            "## Required Behaviors\n- B\n\n## Test Plan\n- C\n\n"
+            "## Constraints And Non-Goals\n- D\n",
+            "## Accomplished\n- Shipped feature X\n\n## Tests Run\n- pytest -q\n\n"
+            "## Remaining Risks\n- None\n",
+        ]
+    )
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+                "completed_criteria": ["A"],
+                "remaining_criteria": [],
+                "progress_pct": 100,
+            },
+        ]
+    )
+
+    def make_fake_claude_edit(prompt: str, label: str) -> str:
+        return claude.run(prompt, label)
+
+    class EditingClaude:
+        """Wrap FakeClaude so implementation rounds actually touch the repo."""
+
+        name = "claude"
+
+        def __init__(self, inner: FakeClaude, repo_root: Path) -> None:
+            self.inner = inner
+            self.repo_root = repo_root
+            self.calls = inner.calls
+
+        def run(self, prompt: str, label: str) -> str:
+            if "implementation round" in label.lower():
+                (self.repo_root / "feature.py").write_text("print('hi')\n", encoding="utf-8")
+            return self.inner.run(prompt, label)
+
+    editing = EditingClaude(claude, repo_root)
+    committer = AutoCommitter(
+        repo_root=repo_root, enabled=True, use_session_branch=False,
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=editing,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=output,
+        auto_committer=committer,
+    )
+    result = orchestrator.run("Ship it")
+    assert result.success is True
+
+    # Exactly one implementation-round commit was created on top of the seed commit.
+    log = subprocess.run(
+        ["git", "log", "--pretty=%s"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "audax round 1: Shipped feature X" in log
+    assert log.count("audax round") == 1
+
+    rendered = output.getvalue()
+    assert "[Auto-commit] round 1 committed as" in rendered
+
+    events = [
+        json.loads(line)
+        for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(event["type"] == "auto_commit_round" and event["round"] == 1 for event in events)
+
+
 def test_parse_markdown_sections_collects_bullets_under_headings() -> None:
     text = """# Title
 ## Accomplished

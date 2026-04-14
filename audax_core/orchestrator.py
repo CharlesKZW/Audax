@@ -10,6 +10,7 @@ from typing import Callable, TextIO
 
 from .approval import interactive_mission_approval
 from .artifacts import assert_mission_spec_locked, lock_mission_spec
+from .auto_commit import AutoCommitter, CommitOutcome
 from .models import (
     ApprovalDecision,
     ClaudeBackend,
@@ -60,6 +61,7 @@ class ReviewLoopOrchestrator:
         reviewers: list[Any] | None = None,
         approval_gate: Callable[[str, Path], ApprovalDecision] | None = None,
         output_stream: TextIO | None = None,
+        auto_committer: AutoCommitter | None = None,
     ) -> None:
         self.config = config
         self.artifacts = artifacts
@@ -83,6 +85,7 @@ class ReviewLoopOrchestrator:
         self.codex = codex
         self.approval_gate = approval_gate or interactive_mission_approval
         self.output_stream = output_stream or sys.stdout
+        self.auto_committer = auto_committer
         self._mission_spec_rounds_run = 0
         self._implementation_rounds_run = 0
         self._latest_mission_spec_review_approved: bool | None = None
@@ -161,6 +164,7 @@ class ReviewLoopOrchestrator:
                 config=self._config_snapshot(),
             )
             self._print_header(task, resumed=resumed)
+            self._handle_auto_commit_start()
             locked_spec = prepare_locked_spec(task)
             if resumed and initial_feedback:
                 self._write_line(
@@ -519,6 +523,10 @@ class ReviewLoopOrchestrator:
                 reviewer_backend=impl_reviewer_backend,
                 review=review,
             )
+            self._handle_auto_commit_round(
+                round_num=round_num,
+                implementer_summary=implementation_summary,
+            )
 
             if review.mission_accomplished and not review.has_issues:
                 self._write_line(f"[Implementation] mission complete in {round_num} round(s)")
@@ -563,6 +571,91 @@ class ReviewLoopOrchestrator:
             f"Implementation rounds max: {self.config.max_implementation_rounds}"
         )
         self._write_line(f"{'=' * 60}")
+
+    def _handle_auto_commit_start(self) -> None:
+        if self.auto_committer is None:
+            return
+        outcome = self.auto_committer.start_session(self.artifacts.session_id)
+        if outcome.status == "disabled":
+            return
+        if outcome.status == "not_a_repo":
+            self._write_line(
+                "[Auto-commit] skipped: current directory is not a git repository"
+            )
+            self.artifacts.append_event(
+                "auto_commit_skipped",
+                reason="not_a_git_repo",
+            )
+            return
+        if outcome.status == "failed":
+            self._write_line(
+                f"[Auto-commit] setup failed: {outcome.error}"
+            )
+            self.artifacts.append_event(
+                "auto_commit_failed",
+                step="session_start",
+                error=outcome.error,
+            )
+            return
+        if outcome.status == "branch_created":
+            self._write_line(
+                f"[Auto-commit] created and switched to branch {outcome.branch}"
+            )
+            self.artifacts.append_event(
+                "auto_commit_branch_created",
+                branch=outcome.branch,
+            )
+            return
+        if outcome.status == "on_current_branch":
+            self._write_line("[Auto-commit] committing to current branch")
+            self.artifacts.append_event("auto_commit_active")
+
+    def _handle_auto_commit_round(
+        self,
+        *,
+        round_num: int,
+        implementer_summary: str,
+    ) -> None:
+        if self.auto_committer is None:
+            return
+        outcome = self.auto_committer.commit_round(
+            round_num=round_num,
+            session_id=self.artifacts.session_id,
+            implementer_summary=implementer_summary,
+        )
+        if outcome.status == "inactive":
+            return
+        if outcome.status == "no_changes":
+            self._write_line(
+                f"[Auto-commit] round {round_num}: no repo changes to commit"
+            )
+            self.artifacts.append_event(
+                "auto_commit_skipped",
+                round=round_num,
+                reason="no_changes",
+            )
+            return
+        if outcome.status == "failed":
+            self._write_line(
+                f"[Auto-commit] round {round_num} failed: {outcome.error}"
+            )
+            self.artifacts.append_event(
+                "auto_commit_failed",
+                step="commit",
+                round=round_num,
+                error=outcome.error,
+            )
+            return
+        if outcome.status == "committed":
+            short = outcome.sha[:12]
+            self._write_line(
+                f"[Auto-commit] round {round_num} committed as {short}"
+            )
+            self.artifacts.append_event(
+                "auto_commit_round",
+                round=round_num,
+                sha=outcome.sha,
+            )
 
     def _emit_round_report(
         self,
