@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 from pathlib import Path
 import sys
 from typing import Callable, TextIO
@@ -75,7 +76,13 @@ class ReviewLoopOrchestrator:
         )
 
     def resume(self, task: str, locked_spec: LockedMissionSpec) -> RunSummary:
-        """Re-run the implementation loop against an existing locked mission spec."""
+        """Re-run the implementation loop against an existing locked mission spec.
+
+        When the previous session's last Codex implementation review is still
+        present, its unresolved issues are rehydrated as ``initial_feedback``
+        for the first resumed round so the reviewer's last word survives the
+        resume boundary.
+        """
 
         def load_existing(_task: str) -> LockedMissionSpec:
             assert_mission_spec_locked(self.artifacts)
@@ -85,6 +92,7 @@ class ReviewLoopOrchestrator:
             task,
             prepare_locked_spec=load_existing,
             resumed=True,
+            initial_feedback=self._load_latest_implementation_feedback(),
         )
 
     def _execute_mission(
@@ -93,6 +101,7 @@ class ReviewLoopOrchestrator:
         *,
         prepare_locked_spec: Callable[[str], LockedMissionSpec],
         resumed: bool,
+        initial_feedback: str = "",
     ) -> RunSummary:
         """Shared lifecycle for fresh runs and resumed runs."""
         self._mission_spec_rounds_run = 0
@@ -130,7 +139,21 @@ class ReviewLoopOrchestrator:
             )
             self._print_header(task, resumed=resumed)
             locked_spec = prepare_locked_spec(task)
-            implementation_review = self._run_implementation_loop(task, locked_spec)
+            if resumed and initial_feedback:
+                self._write_line(
+                    "[Resume] rehydrating last Codex implementation feedback "
+                    "into the first round"
+                )
+                self.artifacts.append_event(
+                    "resume_feedback_rehydrated",
+                    session_id=self.artifacts.session_id,
+                    feedback_chars=len(initial_feedback),
+                )
+            implementation_review = self._run_implementation_loop(
+                task,
+                locked_spec,
+                initial_feedback=initial_feedback,
+            )
             final_summary = implementation_review.summary
             success = implementation_review.mission_accomplished and not implementation_review.has_issues
             ended_at = utc_timestamp()
@@ -343,9 +366,11 @@ class ReviewLoopOrchestrator:
         self,
         task: str,
         locked_spec: LockedMissionSpec,
+        *,
+        initial_feedback: str = "",
     ) -> ImplementationReview:
         """Iterate implementation and review rounds until success or failure."""
-        review_feedback = ""
+        review_feedback = initial_feedback
 
         for round_num in range(1, self.config.max_implementation_rounds + 1):
             self._implementation_rounds_run = round_num
@@ -572,6 +597,38 @@ class ReviewLoopOrchestrator:
             return
         if summary.strip():
             self._write_line(f"[Mission] latest Codex reject summary: {summary.strip()}")
+
+    def _load_latest_implementation_feedback(self) -> str:
+        """Return the prior session's last unresolved Codex feedback, or ``""``.
+
+        Looks in the session's ``codex/`` directory for the most recent
+        ``*_implementation_codex_round_*.json`` review. If that review is
+        already clean, nothing is rehydrated.
+        """
+        reviews_dir = self.artifacts.reviews_dir
+        if not reviews_dir.is_dir():
+            return ""
+        candidates = sorted(
+            (
+                path
+                for path in reviews_dir.iterdir()
+                if path.is_file()
+                and path.suffix == ".json"
+                and "implementation_codex" in path.name
+            ),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        if not candidates:
+            return ""
+        try:
+            payload = json.loads(candidates[0].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        review = parse_implementation_review(payload)
+        if review.mission_accomplished and not review.has_issues:
+            return ""
+        return render_review_feedback(review.issues, summary=review.summary)
 
     def _config_snapshot(self) -> dict[str, object]:
         return {

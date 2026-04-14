@@ -175,6 +175,10 @@ refuse to continue if `mission_spec.md` has been tampered with.
 
 Drafting and approval are skipped on resume — the locked contract from the
 original session is reused as-is, and only the implementation loop runs.
+The previous session's last Codex implementation review is also rehydrated
+as the first resumed round's reviewer feedback, so the unresolved
+objections flow forward as structured input instead of being rediscovered
+from repo state.
 
 ---
 

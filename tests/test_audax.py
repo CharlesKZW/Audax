@@ -698,6 +698,111 @@ def test_resume_continues_failed_session_against_locked_spec(tmp_path: Path) -> 
     assert find_resumable_sessions(workspace_dir) == []
 
 
+def test_resume_rehydrates_last_codex_feedback_into_first_round(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    seeded = _seed_interrupted_session(repo_root)
+    workspace_dir = repo_root / DEFAULT_WORKSPACE_DIR
+
+    artifacts = MissionArtifacts.from_workspace(
+        workspace_dir,
+        session_id=seeded.session_id,
+        started_at=seeded.started_at,
+    )
+
+    import audax_core.app as app_module
+
+    locked_spec = app_module._load_locked_spec(artifacts)
+
+    resume_claude = FakeClaude(
+        [
+            "## Accomplished\n- Fixed the open issue\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- None\n",
+        ]
+    )
+    resume_codex = FakeCodex(
+        [
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+            }
+        ]
+    )
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=resume_claude,
+        codex=resume_codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=io.StringIO(),
+    )
+
+    result = orchestrator.resume("Ship feature R", locked_spec)
+    assert result.success is True
+
+    first_prompt = resume_claude.calls[0][1]
+    # The seeded codex review kept raising the "Open" / "Finish it." issue,
+    # so the first resumed implementation prompt must carry that feedback
+    # instead of the "No outstanding reviewer feedback." placeholder.
+    assert "No outstanding reviewer feedback." not in first_prompt
+    assert "Open" in first_prompt
+    assert "Finish it." in first_prompt
+
+    events = [
+        json.loads(line)
+        for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(event["type"] == "resume_feedback_rehydrated" for event in events)
+
+
+def test_resume_skips_rehydration_when_no_prior_review(tmp_path: Path) -> None:
+    """A freshly-locked spec with no prior implementation round has nothing to rehydrate."""
+    repo_root = tmp_path
+    workspace_dir = repo_root / DEFAULT_WORKSPACE_DIR
+    artifacts = MissionArtifacts.from_workspace(workspace_dir)
+    artifacts.ensure_directories()
+
+    from audax_core.artifacts import lock_mission_spec
+
+    lock_mission_spec(
+        "# Mission\nShip\n\n## Mission Success Criteria\n- A\n",
+        artifacts,
+        "Ship",
+    )
+    import audax_core.app as app_module
+
+    locked_spec = app_module._load_locked_spec(artifacts)
+
+    claude = FakeClaude(
+        [
+            "## Accomplished\n- Implemented\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- None\n",
+        ]
+    )
+    codex = FakeCodex(
+        [
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+            }
+        ]
+    )
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=io.StringIO(),
+    )
+
+    result = orchestrator.resume("Ship", locked_spec)
+    assert result.success is True
+    assert "No outstanding reviewer feedback." in claude.calls[0][1]
+
+
 def test_resume_rejects_session_with_mutated_mission_spec(tmp_path: Path) -> None:
     repo_root = tmp_path
     seeded = _seed_interrupted_session(repo_root)

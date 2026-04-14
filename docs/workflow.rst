@@ -119,4 +119,7 @@ the most recent incomplete session, or ``python audax.py continue
 <session_id>`` to target a specific one. Resume skips drafting and approval
 entirely: the existing ``mission_spec.md`` and ``mission_spec.lock.json`` are
 rehydrated, the SHA-256 digest is re-verified, and the implementation loop
-restarts. See :doc:`cli-reference` for all resume flags.
+restarts. The last Codex implementation review from the prior session is
+also rehydrated as the first resumed round's reviewer feedback, so the
+unresolved objections flow forward as structured input rather than being
+rediscovered from repo state. See :doc:`cli-reference` for all resume flags.

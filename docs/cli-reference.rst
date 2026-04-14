@@ -120,6 +120,16 @@ runs. New prompt and output artifacts are written into the existing session
 directory with fresh timestamps, and an explicit ``session_resumed`` event
 is appended to ``events.jsonl`` so the chronology is preserved.
 
+**Prior-review rehydration.** When the last completed round before the
+disruption ended with Codex flagging unresolved issues, those issues are
+rehydrated from the session's latest ``codex/*_implementation_codex_round_*
+.json`` review and fed to Claude as the first resumed round's
+``Reviewer feedback`` block. This preserves the invariant that every Codex
+judgment eventually reaches Claude — the reviewer's last word survives the
+resume boundary instead of being rediscovered by repo inspection alone. A
+``resume_feedback_rehydrated`` event is appended to ``events.jsonl`` when
+this happens.
+
 Environment
 -----------
 
