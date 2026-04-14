@@ -145,7 +145,7 @@ class MissionArtifacts:
     mission_spec_md: Path
     mission_spec_lock: Path
     prompts_dir: Path
-    logs_dir: Path
+    outputs_dir: Path
     reviews_dir: Path
     event_log_path: Path
     session_manifest_path: Path
@@ -174,8 +174,8 @@ class MissionArtifacts:
             mission_spec_md=session_dir / "mission_spec.md",
             mission_spec_lock=session_dir / "mission_spec.lock.json",
             prompts_dir=session_dir / "prompts",
-            logs_dir=session_dir / "claude",
-            reviews_dir=session_dir / "codex",
+            outputs_dir=session_dir / "outputs",
+            reviews_dir=session_dir / "reviews",
             event_log_path=session_dir / "events.jsonl",
             session_manifest_path=session_dir / "session_manifest.json",
             latest_path=workspace_dir / "latest.json",
@@ -183,12 +183,12 @@ class MissionArtifacts:
         )
 
     def ensure_directories(self) -> None:
-        """Create the workspace, logs, and reviews directories if needed."""
+        """Create the workspace, outputs, and reviews directories if needed."""
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
         self.reviews_dir.mkdir(parents=True, exist_ok=True)
 
     def prompt_path(
@@ -207,7 +207,7 @@ class MissionArtifacts:
             timestamp_token=timestamp_token,
         )
 
-    def log_path(
+    def output_path(
         self,
         stem: str,
         round_num: int,
@@ -215,8 +215,8 @@ class MissionArtifacts:
         *,
         timestamp_token: str | None = None,
     ) -> Path:
-        """Return the path for a Claude-produced per-round log artifact."""
-        return self.logs_dir / self._round_artifact_name(
+        """Return the path for a per-round drafter or implementer text artifact."""
+        return self.outputs_dir / self._round_artifact_name(
             stem,
             round_num,
             suffix,
@@ -230,7 +230,7 @@ class MissionArtifacts:
         *,
         timestamp_token: str | None = None,
     ) -> Path:
-        """Return the path for a Codex-produced per-round review artifact."""
+        """Return the path for a per-round reviewer JSON artifact."""
         return self.reviews_dir / self._round_artifact_name(
             stem,
             round_num,

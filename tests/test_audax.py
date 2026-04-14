@@ -43,27 +43,59 @@ from audax_core.ui import render_session_header_card, render_startup_card
 
 
 class FakeClaude:
-    def __init__(self, responses: list[str]) -> None:
+    name = "claude"
+
+    def __init__(self, responses: list[str], json_responses: list[dict] | None = None) -> None:
         self.responses = list(responses)
+        self.json_responses = list(json_responses or [])
         self.calls: list[tuple[str, str]] = []
+        self.json_calls: list[tuple[str, str, dict]] = []
 
     def run(self, prompt: str, label: str) -> str:
         self.calls.append((label, prompt))
         if not self.responses:
             raise AssertionError("FakeClaude ran out of scripted responses")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    def run_json(self, prompt: str, label: str, schema: dict) -> dict:
+        self.json_calls.append((label, prompt, schema))
+        if not self.json_responses:
+            raise AssertionError("FakeClaude ran out of scripted JSON responses")
+        response = self.json_responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 class FakeCodex:
-    def __init__(self, responses: list[dict]) -> None:
+    name = "codex"
+
+    def __init__(self, responses: list[dict], text_responses: list[str] | None = None) -> None:
         self.responses = list(responses)
+        self.text_responses = list(text_responses or [])
         self.calls: list[tuple[str, str, dict]] = []
+        self.text_calls: list[tuple[str, str]] = []
 
     def run_json(self, prompt: str, label: str, schema: dict) -> dict:
         self.calls.append((label, prompt, schema))
         if not self.responses:
             raise AssertionError("FakeCodex ran out of scripted responses")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    def run(self, prompt: str, label: str) -> str:
+        self.text_calls.append((label, prompt))
+        if not self.text_responses:
+            raise AssertionError("FakeCodex ran out of scripted text responses")
+        response = self.text_responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 def make_config(repo_root: Path, *, require_approval: bool = False) -> LoopConfig:
@@ -211,14 +243,14 @@ def test_full_run_retries_until_success_and_locks_spec(tmp_path: Path) -> None:
     assert manifest["markdown_sha256"]
 
     prompt_files = sorted(artifacts.prompts_dir.iterdir())
-    claude_output_files = sorted(artifacts.logs_dir.iterdir())
-    codex_output_files = sorted(artifacts.reviews_dir.iterdir())
+    output_files = sorted(artifacts.outputs_dir.iterdir())
+    review_files = sorted(artifacts.reviews_dir.iterdir())
     assert len(prompt_files) == 8
-    assert len(claude_output_files) == 4
-    assert len(codex_output_files) == 4
+    assert len(output_files) == 4
+    assert len(review_files) == 4
     assert any("_mission_spec_claude_round_01.txt" in path.name for path in prompt_files)
-    assert any("_implementation_claude_round_02.md" in path.name for path in claude_output_files)
-    assert any("_implementation_codex_round_02.json" in path.name for path in codex_output_files)
+    assert any("_implementation_claude_round_02.md" in path.name for path in output_files)
+    assert any("_implementation_review_codex_round_02.json" in path.name for path in review_files)
 
     report = json.loads(artifacts.report_path.read_text(encoding="utf-8"))
     assert report["success"] is True
@@ -756,6 +788,204 @@ def test_resume_rehydrates_last_codex_feedback_into_first_round(tmp_path: Path) 
     assert any(event["type"] == "resume_feedback_rehydrated" for event in events)
 
 
+def test_implementer_fallback_uses_codex_when_claude_fails(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    spec_markdown = (
+        "# Mission\nShip\n\n## Mission Success Criteria\n- A\n\n## Required Behaviors\n- B\n\n"
+        "## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n"
+    )
+    claude = FakeClaude(
+        [
+            spec_markdown,
+            RuntimeError("model at capacity"),
+        ]
+    )
+    codex_text = (
+        "## Accomplished\n- Codex covered for Claude\n\n## Tests Run\n- pytest -q\n\n"
+        "## Remaining Risks\n- None\n"
+    )
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+            },
+        ],
+        text_responses=[codex_text],
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=output,
+    )
+    result = orchestrator.run("Ship feature")
+    assert result.success is True
+
+    output_files = [path.name for path in artifacts.outputs_dir.iterdir()]
+    # Drafting was Claude (preferred); implementation fell back to Codex.
+    assert any("_mission_spec_claude_round_01.md" in name for name in output_files)
+    assert any("_implementation_codex_round_01.md" in name for name in output_files)
+    assert not any("_implementation_claude_round_01.md" in name for name in output_files)
+
+    rendered = output.getvalue()
+    assert "claude failed" in rendered
+    assert "codex took over after fallback" in rendered
+
+    events = [
+        json.loads(line)
+        for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fallback_events = [event for event in events if event["type"] == "role_fallback_triggered"]
+    assert len(fallback_events) == 1
+    assert fallback_events[0]["role"] == "implementation"
+    assert fallback_events[0]["backend"] == "claude"
+
+
+def test_reviewer_fallback_uses_claude_when_codex_fails(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    spec_markdown = (
+        "# Mission\nShip\n\n## Mission Success Criteria\n- A\n\n## Required Behaviors\n- B\n\n"
+        "## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n"
+    )
+    claude = FakeClaude(
+        [
+            spec_markdown,
+            "## Accomplished\n- Implemented\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- None\n",
+        ],
+        json_responses=[
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Claude reviewed instead.",
+                "issues": [],
+            }
+        ],
+    )
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            RuntimeError("rate limit reached"),
+        ]
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=output,
+    )
+    result = orchestrator.run("Ship feature")
+    assert result.success is True
+
+    review_files = [path.name for path in artifacts.reviews_dir.iterdir()]
+    # Mission spec review was Codex (preferred); implementation review fell back to Claude.
+    assert any("_mission_spec_review_codex_round_01.json" in name for name in review_files)
+    assert any("_implementation_review_claude_round_01.json" in name for name in review_files)
+    assert not any("_implementation_review_codex_round_01.json" in name for name in review_files)
+
+    rendered = output.getvalue()
+    assert "codex failed" in rendered
+    assert "claude took over after fallback" in rendered
+
+    events = [
+        json.loads(line)
+        for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fallback_events = [event for event in events if event["type"] == "role_fallback_triggered"]
+    assert len(fallback_events) == 1
+    assert fallback_events[0]["role"] == "implementation_review"
+    assert fallback_events[0]["backend"] == "codex"
+
+
+def test_fallback_is_per_round_not_sticky(tmp_path: Path) -> None:
+    """Round 2 retries Claude (preferred) even if Claude failed in round 1."""
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+
+    spec_markdown = (
+        "# Mission\nShip\n\n## Mission Success Criteria\n- A\n\n## Required Behaviors\n- B\n\n"
+        "## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n"
+    )
+    claude = FakeClaude(
+        [
+            spec_markdown,
+            RuntimeError("transient capacity"),
+            "## Accomplished\n- Round 2 Claude back\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- None\n",
+        ],
+    )
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            {
+                "mission_accomplished": False,
+                "has_issues": True,
+                "summary": "More work needed.",
+                "issues": [
+                    {
+                        "severity": "low",
+                        "category": "issue",
+                        "title": "Polish",
+                        "details": "Polish things up.",
+                        "suggested_fix": "Polish.",
+                    }
+                ],
+            },
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+            },
+        ],
+        text_responses=[
+            "## Accomplished\n- Codex covered round 1\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- Open\n",
+        ],
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=io.StringIO(),
+    )
+    result = orchestrator.run("Ship feature")
+    assert result.success is True
+
+    output_files = [path.name for path in artifacts.outputs_dir.iterdir()]
+    # Round 1 implementation came from Codex (fallback);
+    # round 2 implementation came from Claude (preferred, retried fresh).
+    assert any("_implementation_codex_round_01.md" in name for name in output_files)
+    assert any("_implementation_claude_round_02.md" in name for name in output_files)
+
+
+def test_orchestrator_constructor_requires_either_pair_or_lists(tmp_path: Path) -> None:
+    artifacts = MissionArtifacts.from_workspace(tmp_path / DEFAULT_WORKSPACE_DIR)
+    with pytest.raises(TypeError):
+        ReviewLoopOrchestrator(
+            config=make_config(tmp_path),
+            artifacts=artifacts,
+        )
+
+
 def test_resume_skips_rehydration_when_no_prior_review(tmp_path: Path) -> None:
     """A freshly-locked spec with no prior implementation round has nothing to rehydrate."""
     repo_root = tmp_path
@@ -1180,6 +1410,43 @@ def test_claude_cli_sends_prompt_via_stdin_instead_of_argv(tmp_path: Path) -> No
         "--verbose",
         "--include-partial-messages",
     ]
+
+
+def test_claude_as_reviewer_parses_plain_json_response(tmp_path: Path) -> None:
+    from audax_core.backends import _parse_json_text
+
+    payload = '{"approved": true, "summary": "ok", "issues": []}'
+    schema = {"required": ["approved", "summary", "issues"]}
+    assert _parse_json_text(payload, schema, label="x") == {
+        "approved": True,
+        "summary": "ok",
+        "issues": [],
+    }
+
+
+def test_claude_as_reviewer_strips_markdown_fences(tmp_path: Path) -> None:
+    from audax_core.backends import _parse_json_text
+
+    payload = '```json\n{"approved": true, "summary": "ok", "issues": []}\n```'
+    schema = {"required": ["approved", "summary", "issues"]}
+    parsed = _parse_json_text(payload, schema, label="x")
+    assert parsed["approved"] is True
+
+
+def test_claude_as_reviewer_parse_failure_raises_runtime_error(tmp_path: Path) -> None:
+    from audax_core.backends import _parse_json_text
+
+    schema = {"required": ["approved"]}
+    with pytest.raises(RuntimeError, match="did not return valid JSON"):
+        _parse_json_text("not json at all", schema, label="x")
+
+
+def test_claude_as_reviewer_missing_required_field_raises_runtime_error(tmp_path: Path) -> None:
+    from audax_core.backends import _parse_json_text
+
+    schema = {"required": ["approved", "summary", "issues"]}
+    with pytest.raises(RuntimeError, match="missing required field"):
+        _parse_json_text('{"approved": true}', schema, label="x")
 
 
 def test_orchestrator_uses_current_stdout_by_default(tmp_path: Path) -> None:

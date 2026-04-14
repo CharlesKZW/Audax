@@ -21,6 +21,7 @@ from .models import (
     RunSummary,
     utc_timestamp,
 )
+from typing import Any
 from .prompts import (
     build_implementation_prompt,
     build_implementation_review_prompt,
@@ -48,14 +49,32 @@ class ReviewLoopOrchestrator:
         self,
         config: LoopConfig,
         artifacts: MissionArtifacts,
-        claude: ClaudeBackend,
-        codex: CodexBackend,
+        claude: ClaudeBackend | None = None,
+        codex: CodexBackend | None = None,
         *,
+        implementers: list[Any] | None = None,
+        reviewers: list[Any] | None = None,
         approval_gate: Callable[[str, Path], ApprovalDecision] | None = None,
         output_stream: TextIO | None = None,
     ) -> None:
         self.config = config
         self.artifacts = artifacts
+        if implementers is None and reviewers is None:
+            if claude is None or codex is None:
+                raise TypeError(
+                    "ReviewLoopOrchestrator requires either (claude, codex) or "
+                    "(implementers, reviewers)"
+                )
+            implementers = [claude, codex]
+            reviewers = [codex, claude]
+        elif implementers is None or reviewers is None:
+            raise TypeError(
+                "implementers and reviewers must be provided together"
+            )
+        if not implementers or not reviewers:
+            raise ValueError("implementers and reviewers must be non-empty lists")
+        self.implementers: list[Any] = list(implementers)
+        self.reviewers: list[Any] = list(reviewers)
         self.claude = claude
         self.codex = codex
         self.approval_gate = approval_gate or interactive_mission_approval
@@ -252,7 +271,7 @@ class ReviewLoopOrchestrator:
                 repo_root=self.config.repo_root,
                 workspace_dir=self.config.workspace_dir,
             )
-            self._write_line(f"[Mission {round_num}] Claude drafting mission spec")
+            self._write_line(f"[Mission {round_num}] drafting mission spec")
             prompt = build_mission_spec_prompt(
                 task=task,
                 repo_context=repo_context,
@@ -262,63 +281,76 @@ class ReviewLoopOrchestrator:
                     codex_feedback=codex_feedback,
                 ),
             )
-            prompt_path = self.artifacts.prompt_path("mission_spec_claude", round_num)
+            preferred_drafter = self._backend_name(self.implementers[0])
+            prompt_path = self.artifacts.prompt_path(
+                f"mission_spec_{preferred_drafter}", round_num,
+            )
             prompt_path.write_text(prompt + "\n", encoding="utf-8")
             self.artifacts.append_event(
                 "prompt_written",
-                actor="claude",
+                actor=preferred_drafter,
                 phase="mission_spec",
                 round=round_num,
                 path=prompt_path,
             )
-            current_spec = self.claude.run(prompt, label=f"Claude mission spec round {round_num}").strip()
-            if not current_spec:
-                raise RuntimeError(f"Claude returned an empty mission spec in round {round_num}")
+            current_spec, drafter_backend = self._call_text_backend(
+                prompt,
+                label=f"mission spec drafting round {round_num}",
+                role="mission_spec",
+                round_num=round_num,
+                candidates=self.implementers,
+            )
 
             self.artifacts.mission_spec_md.write_text(current_spec + "\n", encoding="utf-8")
-            claude_output_path = self.artifacts.log_path("mission_spec_claude", round_num, "md")
-            claude_output_path.write_text(
-                current_spec + "\n",
-                encoding="utf-8",
+            output_path = self.artifacts.output_path(
+                f"mission_spec_{drafter_backend}", round_num, "md",
             )
+            output_path.write_text(current_spec + "\n", encoding="utf-8")
             self.artifacts.append_event(
                 "output_written",
-                actor="claude",
+                actor=drafter_backend,
                 phase="mission_spec",
                 round=round_num,
-                path=claude_output_path,
+                path=output_path,
             )
 
-            self._write_line(f"[Mission {round_num}] Codex reviewing mission spec")
+            self._write_line(f"[Mission {round_num}] reviewing mission spec")
             review_prompt = build_mission_review_prompt(
                 task=task,
                 repo_context=repo_context,
                 mission_spec=current_spec,
             )
-            review_prompt_path = self.artifacts.prompt_path("mission_spec_codex", round_num)
+            preferred_reviewer = self._backend_name(self.reviewers[0])
+            review_prompt_path = self.artifacts.prompt_path(
+                f"mission_spec_review_{preferred_reviewer}", round_num,
+            )
             review_prompt_path.write_text(review_prompt + "\n", encoding="utf-8")
             self.artifacts.append_event(
                 "prompt_written",
-                actor="codex",
+                actor=preferred_reviewer,
                 phase="mission_spec_review",
                 round=round_num,
                 path=review_prompt_path,
             )
-            review = parse_mission_review(
-                self.codex.run_json(
-                    review_prompt,
-                    label=f"Codex mission spec review round {round_num}",
-                    schema=mission_review_schema(),
-                )
+            review_payload, reviewer_backend = self._call_json_backend(
+                review_prompt,
+                label=f"mission spec review round {round_num}",
+                role="mission_spec_review",
+                schema=mission_review_schema(),
+                round_num=round_num,
+                candidates=self.reviewers,
             )
-            review_path = self.artifacts.review_path("mission_spec_codex", round_num)
+            review = parse_mission_review(review_payload)
+            review_path = self.artifacts.review_path(
+                f"mission_spec_review_{reviewer_backend}", round_num,
+            )
             self.artifacts.write_json(
                 review_path,
                 mission_review_to_dict(review),
             )
             self.artifacts.append_event(
                 "output_written",
-                actor="codex",
+                actor=reviewer_backend,
                 phase="mission_spec_review",
                 round=round_num,
                 path=review_path,
@@ -379,7 +411,7 @@ class ReviewLoopOrchestrator:
                 repo_root=self.config.repo_root,
                 workspace_dir=self.config.workspace_dir,
             )
-            self._write_line(f"[Implementation {round_num}] Claude implementing mission")
+            self._write_line(f"[Implementation {round_num}] implementing mission")
             implementation_prompt = build_implementation_prompt(
                 task=task,
                 repo_context=repo_context,
@@ -388,47 +420,54 @@ class ReviewLoopOrchestrator:
                 locked_spec=locked_spec,
                 review_feedback=review_feedback,
             )
-            implementation_prompt_path = self.artifacts.prompt_path("implementation_claude", round_num)
+            preferred_implementer = self._backend_name(self.implementers[0])
+            implementation_prompt_path = self.artifacts.prompt_path(
+                f"implementation_{preferred_implementer}", round_num,
+            )
             implementation_prompt_path.write_text(implementation_prompt + "\n", encoding="utf-8")
             self.artifacts.append_event(
                 "prompt_written",
-                actor="claude",
+                actor=preferred_implementer,
                 phase="implementation",
                 round=round_num,
                 path=implementation_prompt_path,
             )
-            claude_summary = self.claude.run(
+            implementation_summary, implementer_backend = self._call_text_backend(
                 implementation_prompt,
-                label=f"Claude implementation round {round_num}",
-            ).strip()
-            if not claude_summary:
-                raise RuntimeError(f"Claude returned an empty implementation summary in round {round_num}")
+                label=f"implementation round {round_num}",
+                role="implementation",
+                round_num=round_num,
+                candidates=self.implementers,
+            )
 
-            implementation_output_path = self.artifacts.log_path("implementation_claude", round_num, "md")
+            implementation_output_path = self.artifacts.output_path(
+                f"implementation_{implementer_backend}", round_num, "md",
+            )
             implementation_output_path.write_text(
-                claude_summary + "\n",
+                implementation_summary + "\n",
                 encoding="utf-8",
             )
             self.artifacts.append_event(
                 "output_written",
-                actor="claude",
+                actor=implementer_backend,
                 phase="implementation",
                 round=round_num,
                 path=implementation_output_path,
             )
             assert_mission_spec_locked(self.artifacts)
 
-            self._write_line(f"[Implementation {round_num}] Codex reviewing implementation")
+            self._write_line(f"[Implementation {round_num}] reviewing implementation")
             implementation_review_prompt = build_implementation_review_prompt(
                 task=task,
                 repo_context=repo_context,
                 mission_spec=self.artifacts.mission_spec_md.read_text(encoding="utf-8"),
                 mission_md_path=self.artifacts.mission_spec_md,
-                claude_summary=claude_summary,
+                claude_summary=implementation_summary,
                 locked_spec=locked_spec,
             )
+            preferred_reviewer = self._backend_name(self.reviewers[0])
             implementation_review_prompt_path = self.artifacts.prompt_path(
-                "implementation_codex",
+                f"implementation_review_{preferred_reviewer}",
                 round_num,
             )
             implementation_review_prompt_path.write_text(
@@ -437,26 +476,30 @@ class ReviewLoopOrchestrator:
             )
             self.artifacts.append_event(
                 "prompt_written",
-                actor="codex",
+                actor=preferred_reviewer,
                 phase="implementation_review",
                 round=round_num,
                 path=implementation_review_prompt_path,
             )
-            review = parse_implementation_review(
-                self.codex.run_json(
-                    implementation_review_prompt,
-                    label=f"Codex implementation review round {round_num}",
-                    schema=implementation_review_schema(),
-                )
+            review_payload, impl_reviewer_backend = self._call_json_backend(
+                implementation_review_prompt,
+                label=f"implementation review round {round_num}",
+                role="implementation_review",
+                schema=implementation_review_schema(),
+                round_num=round_num,
+                candidates=self.reviewers,
             )
-            implementation_review_path = self.artifacts.review_path("implementation_codex", round_num)
+            review = parse_implementation_review(review_payload)
+            implementation_review_path = self.artifacts.review_path(
+                f"implementation_review_{impl_reviewer_backend}", round_num,
+            )
             self.artifacts.write_json(
                 implementation_review_path,
                 implementation_review_to_dict(review),
             )
             self.artifacts.append_event(
                 "output_written",
-                actor="codex",
+                actor=impl_reviewer_backend,
                 phase="implementation_review",
                 round=round_num,
                 path=implementation_review_path,
@@ -598,6 +641,96 @@ class ReviewLoopOrchestrator:
         if summary.strip():
             self._write_line(f"[Mission] latest Codex reject summary: {summary.strip()}")
 
+    def _backend_name(self, backend: Any) -> str:
+        return getattr(backend, "name", backend.__class__.__name__.lower())
+
+    def _call_text_backend(
+        self,
+        prompt: str,
+        *,
+        label: str,
+        role: str,
+        round_num: int,
+        candidates: list[Any],
+    ) -> tuple[str, str]:
+        """Call text-producing backends in order until one succeeds.
+
+        Returns ``(output, backend_name)``. Raises ``RuntimeError`` only when
+        every candidate has failed. Each fallback emits a stdout line and a
+        ``role_fallback_triggered`` event.
+        """
+        last_error = ""
+        for idx, backend in enumerate(candidates):
+            backend_name = self._backend_name(backend)
+            try:
+                output = backend.run(prompt, label).strip()
+                if not output:
+                    raise RuntimeError("backend returned empty output")
+                if idx > 0:
+                    self._write_line(
+                        f"  [Round {round_num}] {role}: {backend_name} took over after fallback"
+                    )
+                return output, backend_name
+            except RuntimeError as exc:
+                last_error = str(exc) or exc.__class__.__name__
+                self.artifacts.append_event(
+                    "role_fallback_triggered",
+                    role=role,
+                    backend=backend_name,
+                    round=round_num,
+                    error=last_error,
+                )
+                self._write_line(
+                    f"  [Round {round_num}] {role}: {backend_name} failed "
+                    f"({last_error}); trying next candidate"
+                )
+        raise RuntimeError(
+            f"All {role} candidates failed in round {round_num}: {last_error}"
+        )
+
+    def _call_json_backend(
+        self,
+        prompt: str,
+        *,
+        label: str,
+        role: str,
+        schema: dict[str, Any],
+        round_num: int,
+        candidates: list[Any],
+    ) -> tuple[dict[str, Any], str]:
+        """Call JSON-producing backends in order until one succeeds.
+
+        Returns ``(payload, backend_name)``. Raises ``RuntimeError`` only when
+        every candidate has failed. Each fallback emits a stdout line and a
+        ``role_fallback_triggered`` event.
+        """
+        last_error = ""
+        for idx, backend in enumerate(candidates):
+            backend_name = self._backend_name(backend)
+            try:
+                payload = backend.run_json(prompt, label, schema)
+                if idx > 0:
+                    self._write_line(
+                        f"  [Round {round_num}] {role}: {backend_name} took over after fallback"
+                    )
+                return payload, backend_name
+            except RuntimeError as exc:
+                last_error = str(exc) or exc.__class__.__name__
+                self.artifacts.append_event(
+                    "role_fallback_triggered",
+                    role=role,
+                    backend=backend_name,
+                    round=round_num,
+                    error=last_error,
+                )
+                self._write_line(
+                    f"  [Round {round_num}] {role}: {backend_name} failed "
+                    f"({last_error}); trying next candidate"
+                )
+        raise RuntimeError(
+            f"All {role} candidates failed in round {round_num}: {last_error}"
+        )
+
     def _load_latest_implementation_feedback(self) -> str:
         """Return the prior session's last unresolved Codex feedback, or ``""``.
 
@@ -614,7 +747,7 @@ class ReviewLoopOrchestrator:
                 for path in reviews_dir.iterdir()
                 if path.is_file()
                 and path.suffix == ".json"
-                and "implementation_codex" in path.name
+                and "implementation_review" in path.name
             ),
             key=lambda p: p.name,
             reverse=True,
@@ -682,8 +815,8 @@ class ReviewLoopOrchestrator:
                     "mission_spec_md": str(self.artifacts.mission_spec_md),
                     "mission_spec_lock": str(self.artifacts.mission_spec_lock),
                     "prompts_dir": str(self.artifacts.prompts_dir),
-                    "claude_dir": str(self.artifacts.logs_dir),
-                    "codex_dir": str(self.artifacts.reviews_dir),
+                    "outputs_dir": str(self.artifacts.outputs_dir),
+                    "reviews_dir": str(self.artifacts.reviews_dir),
                     "report_path": str(self.artifacts.report_path),
                 },
             },

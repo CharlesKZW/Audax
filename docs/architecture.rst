@@ -19,7 +19,7 @@ A few design choices are load-bearing and worth calling out explicitly. They
 are also the places Audax chooses to absorb risk in exchange for keeping the
 review loop autonomous.
 
-Claude implements, Codex reviews
+Claude implements, Codex reviews — with automatic fallback
    The role split is intentional. Informal observation suggests:
 
    * **Claude** tends to be **more creative and fluent** at drafting specs
@@ -29,13 +29,28 @@ Claude implements, Codex reviews
      something that is almost-but-not-quite right.
 
    Audax therefore defaults to Claude on the implementer side and Codex on
-   the reviewer side.
+   the reviewer side. But both backends now satisfy both roles, so any of
+   the four combinations in the 2x2 (implementer × reviewer) space can run.
+   If a preferred backend fails on a given round — capacity error, rate
+   limit, subprocess crash, or, when Claude is acting as reviewer, a JSON
+   parse failure — the orchestrator falls through to the next candidate
+   for that role within the same round. Fallback is **per-round, not
+   sticky**: if Claude failed in round 3, Codex covers round 3, and round 4
+   tries Claude first again, on the assumption that capacity issues are
+   transient.
+
+   When fallback fires, Audax prints a stdout line such as
+   ``[Round 3] implementation: claude failed (model at capacity); trying
+   next candidate`` and appends a ``role_fallback_triggered`` event to
+   ``events.jsonl``, so the swap is visible both interactively and in the
+   forensic trail.
 
    .. warning::
 
       **Open to correction.** This pairing is based on informal observation,
       not a benchmark. If you see the opposite, please open an issue — the
-      roles can be swapped by editing ``audax_core/backends.py``.
+      preferred order can be swapped by editing the
+      ``implementers``/``reviewers`` lists built in ``audax_core/app.py``.
 
 Two frontier models at maximum reasoning effort
    Claude Opus with ``reasoning effort=max`` is paired with Codex

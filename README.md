@@ -36,9 +36,21 @@ Audax tries to make audacious work reliable by construction rather than by hope.
 > So Audax defaults to **Claude on the implementer side** and **Codex on the
 > reviewer side**, because that matches where each model seems strongest.
 >
-> ⚠️ **Open to correction.** This is based on informal observation, not a
-> benchmark. If you see the opposite, please open an issue — the roles can
-> be swapped by editing `audax_core/backends.py`.
+> **Both backends now serve both roles.** Any of the four combinations in the
+> 2×2 (implementer × reviewer) space can run. If a preferred backend fails on
+> a given round — capacity error, rate limit, subprocess crash, or (when
+> Claude is acting as reviewer) a JSON parse failure — the orchestrator
+> falls through to the next candidate for that role within the same round.
+> Fallback is **per-round, not sticky**: if Claude failed on round 3, Codex
+> covers round 3 and round 4 retries Claude first, on the assumption that
+> capacity issues are transient. When fallback fires, Audax prints a stdout
+> line and appends a `role_fallback_triggered` event to `events.jsonl`, so
+> the swap is visible both interactively and in the forensic trail.
+>
+> ⚠️ **Open to correction.** The default ordering is based on informal
+> observation, not a benchmark. If you see the opposite, please open an
+> issue — the preferred order can be swapped by editing the
+> `implementers`/`reviewers` lists built in `audax_core/app.py`.
 
 ---
 
