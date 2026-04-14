@@ -1761,6 +1761,60 @@ def test_orchestrator_auto_commits_each_implementation_round(tmp_path: Path) -> 
     assert commit_events[0]["commits"][0]["subject"].startswith("audax round 1:")
 
 
+def test_render_inline_markdown_styles_code_and_bold() -> None:
+    from audax_core.ui import _render_inline_markdown
+
+    rendered = _render_inline_markdown(
+        "Use `npm run build` to **compile** __all__ packages",
+        color=True,
+    )
+    # Code span wrapped in a cyan-ish foreground + reset.
+    assert "\x1b[38;5;213mnpm run build\x1b[39m" in rendered
+    # Bold spans wrapped in \x1b[1m...\x1b[22m.
+    assert "\x1b[1mcompile\x1b[22m" in rendered
+    assert "\x1b[1mall\x1b[22m" in rendered
+
+
+def test_render_inline_markdown_strips_markers_when_color_disabled() -> None:
+    from audax_core.ui import _render_inline_markdown
+
+    rendered = _render_inline_markdown(
+        "Use `npm run build` to **compile** the code",
+        color=False,
+    )
+    assert rendered == "Use npm run build to compile the code"
+
+
+def test_render_round_report_applies_inline_markdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    review = ImplementationReview(
+        mission_accomplished=False,
+        has_issues=False,
+        summary="",
+        issues=[],
+        completed_criteria=[],
+        remaining_criteria=[],
+        progress_pct=0,
+    )
+    rendered = render_implementation_round_report(
+        round_num=1,
+        implementer_backend="claude",
+        implementer_summary=(
+            "## Accomplished\n"
+            "- Use `npm run build` to run the **full** pipeline\n"
+        ),
+        reviewer_backend="codex",
+        review=review,
+    )
+    # Code span became a magenta run.
+    assert "\x1b[38;5;213mnpm run build\x1b[39m" in rendered
+    # Bold span became bold.
+    assert "\x1b[1mfull\x1b[22m" in rendered
+    # Raw markdown markers no longer present in the rendered line.
+    assert "`npm run build`" not in rendered
+    assert "**full**" not in rendered
+
+
 def test_parse_markdown_sections_collects_bullets_under_headings() -> None:
     text = """# Title
 ## Accomplished

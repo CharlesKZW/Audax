@@ -36,10 +36,47 @@ _SECTION_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*$")
 _BULLET_PATTERN = re.compile(r"^\s*[-*+]\s+(.+?)\s*$")
 _LEADING_NUMBER_PATTERN = re.compile(r"^\s*\d+[.)]?\s+")
 
+_INLINE_CODE_PATTERN = re.compile(r"`([^`\n]+)`")
+_INLINE_BOLD_ASTERISK_PATTERN = re.compile(r"\*\*([^*\n]+?)\*\*")
+_INLINE_BOLD_UNDERSCORE_PATTERN = re.compile(r"__([^_\n]+?)__")
+INLINE_CODE_ANSI = "38;5;213"
+INLINE_BOLD_ANSI = "1"
+
 
 def _strip_leading_number(item: str) -> str:
     """Remove a leading ``N.`` / ``N)`` prefix so we can renumber cleanly."""
     return _LEADING_NUMBER_PATTERN.sub("", item, count=1).strip()
+
+
+def _render_inline_markdown(text: str, *, color: bool) -> str:
+    """Apply ANSI styles to simple markdown inline spans.
+
+    Supports backtick code spans and ``**bold**`` / ``__bold__``. Unmatched
+    markers pass through unchanged. When ``color`` is False the markers are
+    stripped so raw ``**`` / ``` ` ``` do not leak into plain output.
+    """
+    if not color:
+        return _strip_inline_markdown(text)
+    text = _INLINE_CODE_PATTERN.sub(
+        lambda m: f"\x1b[{INLINE_CODE_ANSI}m{m.group(1)}\x1b[39m",
+        text,
+    )
+    text = _INLINE_BOLD_ASTERISK_PATTERN.sub(
+        lambda m: f"\x1b[{INLINE_BOLD_ANSI}m{m.group(1)}\x1b[22m",
+        text,
+    )
+    text = _INLINE_BOLD_UNDERSCORE_PATTERN.sub(
+        lambda m: f"\x1b[{INLINE_BOLD_ANSI}m{m.group(1)}\x1b[22m",
+        text,
+    )
+    return text
+
+
+def _strip_inline_markdown(text: str) -> str:
+    text = _INLINE_CODE_PATTERN.sub(r"\1", text)
+    text = _INLINE_BOLD_ASTERISK_PATTERN.sub(r"\1", text)
+    text = _INLINE_BOLD_UNDERSCORE_PATTERN.sub(r"\1", text)
+    return text
 
 
 def supports_rich_terminal(stream: TextIO) -> bool:
@@ -391,7 +428,8 @@ def _compose_card(
     ]
     for line in body_lines:
         for sub in _wrap_preserving_ansi(line, content_width):
-            rendered.append(f"│ {_pad_ansi(sub, content_width)} │")
+            styled = _render_inline_markdown(sub, color=color)
+            rendered.append(f"│ {_pad_ansi(styled, content_width)} │")
     rendered.append(f"╰{'─' * (total_width - 2)}╯")
     return "\n".join(rendered) + "\n"
 
