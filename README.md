@@ -169,7 +169,7 @@ python audax.py "Add JWT auth middleware with refresh token rotation"
 - `--heartbeat-seconds 5`
 - `--subprocess-timeout-seconds` (no timeout by default; set a number to cap hung subprocesses, or `0` to explicitly disable)
 - `--claude-cmd` / `--codex-cmd` to override the backend CLI names
-- `--auto-commit` / `--no-auto-commit` — commit each implementation round to git (default **on**; silently skipped when not a git repo)
+- `--auto-commit` / `--no-auto-commit` — the implementer (Claude by default, Codex on fallback) is instructed to commit logical chunks as it works; Audax then runs a final **sweeper** commit per round to capture any trailing uncommitted work, so one round can yield many commits rather than one monolithic dump (default **on**; silently skipped when not a git repo)
 - `--session-branch` / `--no-session-branch` — check out a dedicated `audax/<session_id>` branch to keep commits off your main branch (default **off**; commits land on the current branch)
 
 ### Resuming An Interrupted Session

@@ -133,6 +133,13 @@ def build_implementation_prompt(
         - Implement all remaining mission requirements directly in the repository.
         - Respect repo rules such as tests, documentation, and synchronization requirements.
         - Run the relevant tests or checks when possible.
+        - Version control: if the repo is a git repository, commit logical
+          chunks of work as you make them with clear, descriptive commit
+          messages. Prefer several small, reviewable commits over one
+          monolithic dump at the end. Do not push. Do not modify git config.
+          Audax will make a final sweeper commit after your round to capture
+          any trailing uncommitted work, so there is no need to batch
+          everything into one commit yourself.
         - Return a concise markdown summary with these sections exactly:
           - Accomplished
           - Tests Run

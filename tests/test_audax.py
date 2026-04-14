@@ -1505,10 +1505,12 @@ def test_auto_committer_commits_changes_on_current_branch(tmp_path: Path) -> Non
         ),
     )
     assert outcome.status == "committed"
-    assert outcome.sha
-    assert "audax round 1: Added feature.py with hello print" in outcome.message
-    assert "Audax-Session: 20260414T000000Z_pid1" in outcome.message
-    assert "Audax-Round: 1" in outcome.message
+    # Only the sweeper commit landed (Claude did not commit in this test).
+    assert len(outcome.round_commits) == 1
+    assert outcome.sweeper_sha == outcome.round_commits[0].sha
+    assert outcome.round_commits[0].subject.startswith(
+        "audax round 1: Added feature.py with hello print"
+    )
 
     log = subprocess.run(
         ["git", "log", "-1", "--pretty=%B"],
@@ -1519,6 +1521,76 @@ def test_auto_committer_commits_changes_on_current_branch(tmp_path: Path) -> Non
     ).stdout
     assert "Added feature.py with hello print" in log
     assert "Audax-Round: 1" in log
+
+
+def test_auto_committer_captures_claude_and_sweeper_commits(tmp_path: Path) -> None:
+    """When Claude commits mid-round, Audax's sweeper only catches the trailing work."""
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+
+    committer = AutoCommitter(
+        repo_root=repo_root, enabled=True, use_session_branch=False,
+    )
+    committer.start_session("s1")
+
+    # Claude makes two of its own commits during the round.
+    (repo_root / "mod_a.py").write_text("a\n", encoding="utf-8")
+    subprocess.run(["git", "add", "mod_a.py"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add module a"], cwd=repo_root, check=True
+    )
+    (repo_root / "mod_b.py").write_text("b\n", encoding="utf-8")
+    subprocess.run(["git", "add", "mod_b.py"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add module b"], cwd=repo_root, check=True
+    )
+    # And leaves one uncommitted file for the sweeper to catch.
+    (repo_root / "leftover.py").write_text("tail\n", encoding="utf-8")
+
+    outcome = committer.commit_round(
+        round_num=2,
+        session_id="s1",
+        implementer_summary="## Accomplished\n- Added modules a, b, and leftover\n",
+    )
+    assert outcome.status == "committed"
+    assert len(outcome.round_commits) == 3
+    subjects = [commit.subject for commit in outcome.round_commits]
+    assert subjects[0] == "add module a"
+    assert subjects[1] == "add module b"
+    assert subjects[2].startswith("audax round 2:")
+    assert outcome.sweeper_sha == outcome.round_commits[2].sha
+
+
+def test_auto_committer_no_sweeper_when_claude_committed_everything(tmp_path: Path) -> None:
+    """If Claude has already committed all work, the sweeper is a no-op but
+    the round still reports Claude's commits."""
+    from audax_core.auto_commit import AutoCommitter
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+
+    committer = AutoCommitter(
+        repo_root=repo_root, enabled=True, use_session_branch=False,
+    )
+    committer.start_session("s1")
+
+    (repo_root / "mod.py").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "mod.py"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add module"], cwd=repo_root, check=True
+    )
+
+    outcome = committer.commit_round(
+        round_num=1, session_id="s1", implementer_summary="## Accomplished\n- ok\n",
+    )
+    assert outcome.status == "committed"
+    assert len(outcome.round_commits) == 1
+    assert outcome.round_commits[0].subject == "add module"
+    assert outcome.sweeper_sha == ""  # sweeper did not commit anything
 
 
 def test_auto_committer_creates_session_branch(tmp_path: Path) -> None:
@@ -1672,14 +1744,21 @@ def test_orchestrator_auto_commits_each_implementation_round(tmp_path: Path) -> 
     assert log.count("audax round") == 1
 
     rendered = output.getvalue()
-    assert "[Auto-commit] round 1 committed as" in rendered
+    assert "[Auto-commit] round 1 captured 1 commit:" in rendered
+    assert "[sweeper]" in rendered
 
     events = [
         json.loads(line)
         for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert any(event["type"] == "auto_commit_round" and event["round"] == 1 for event in events)
+    commit_events = [
+        event for event in events
+        if event["type"] == "auto_commit_round" and event["round"] == 1
+    ]
+    assert len(commit_events) == 1
+    assert commit_events[0]["commits"]
+    assert commit_events[0]["commits"][0]["subject"].startswith("audax round 1:")
 
 
 def test_parse_markdown_sections_collects_bullets_under_headings() -> None:

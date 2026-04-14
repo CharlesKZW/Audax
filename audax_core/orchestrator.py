@@ -647,14 +647,24 @@ class ReviewLoopOrchestrator:
             )
             return
         if outcome.status == "committed":
-            short = outcome.sha[:12]
+            count = len(outcome.round_commits)
+            noun = "commit" if count == 1 else "commits"
             self._write_line(
-                f"[Auto-commit] round {round_num} committed as {short}"
+                f"[Auto-commit] round {round_num} captured {count} {noun}:"
             )
+            for commit in outcome.round_commits:
+                marker = "sweeper" if commit.sha == outcome.sweeper_sha else "implementer"
+                self._write_line(
+                    f"  [{marker}] {commit.short_sha}  {commit.subject}"
+                )
             self.artifacts.append_event(
                 "auto_commit_round",
                 round=round_num,
-                sha=outcome.sha,
+                sweeper_sha=outcome.sweeper_sha,
+                commits=[
+                    {"sha": commit.sha, "subject": commit.subject}
+                    for commit in outcome.round_commits
+                ],
             )
 
     def _emit_round_report(

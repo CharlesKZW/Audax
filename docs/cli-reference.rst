@@ -57,12 +57,25 @@ Arguments And Options
 
 ``--auto-commit`` / ``--no-auto-commit``
    Commit repository changes after each implementation round. **Enabled by
-   default.** The orchestrator runs ``git add -A`` followed by ``git commit``
-   with a deterministic message: title ``audax round <N>: <first line of
-   Accomplished>`` and trailer lines ``Audax-Session: <id>`` and
-   ``Audax-Round: <N>``. If the target directory is not a git repository,
-   auto-commit is skipped with a single log line. If the round produced no
-   repo changes, the commit is skipped too.
+   default.**
+
+   The **implementer** (Claude by default, Codex on fallback) is instructed
+   in its prompt to commit logical chunks of work as it goes — so a single
+   round may produce multiple implementer-authored commits. After the
+   round, Audax runs a **sweeper** (``git add -A`` followed by ``git
+   commit`` with a deterministic message: title ``audax round <N>: <first
+   line of Accomplished>`` and trailer lines ``Audax-Session: <id>`` and
+   ``Audax-Round: <N>``) to capture any trailing uncommitted work. If the
+   implementer already committed everything, the sweeper is a no-op.
+
+   The orchestrator then enumerates every commit that landed during the
+   round — both the implementer's and the sweeper's — in chronological
+   order, and prints one line per commit to stdout (tagged
+   ``[implementer]`` or ``[sweeper]``). The full list is also persisted in
+   a single ``auto_commit_round`` event in ``events.jsonl``.
+
+   If the target directory is not a git repository, auto-commit is skipped
+   with a single log line and no commits are attempted.
 
 ``--session-branch`` / ``--no-session-branch``
    Check out a fresh ``audax/<session_id>`` branch at session start and
