@@ -16,7 +16,7 @@ session**:
 - 🔁 **Orchestrator** feeds reviews back into Claude until the mission is
   accomplished or the round budget is spent.
 
-Audax tries to make audacious work reliable **by construction** rather than by hope.
+Audax tries to make audacious work reliable by construction rather than by hope.
 
 ---
 
@@ -109,8 +109,8 @@ Defaults in `audax_core/backends.py`:
 | Claude | `opus` | `max` | streamed JSON + partial messages |
 | Codex | `gpt-5.4` | `xhigh` | JSON validated against a schema |
 
-These settings optimize for **review quality over price and latency**.
-Expect each run to be meaningfully more expensive and slower than a one-shot
+These settings optimize for **output quality over price and latency**.
+Expect each run to be significantly more expensive and slower than a one-shot
 call to a default model, especially across multiple rounds. Edit the
 constants at the top of `audax_core/backends.py` if you want cheaper runs.
 
@@ -236,3 +236,9 @@ reference.
 > default, or a backend setting, please update both the README and the
 > matching `.rst` page in the same commit so the rendered HTML does not
 > drift out of sync.
+
+---
+
+## License
+
+Audax is released under the [MIT License](LICENSE).
