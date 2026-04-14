@@ -12,6 +12,62 @@ than a single unconstrained agent session:
 * repository-aware prompting grounded in local rule files, and
 * a durable artifact trail for auditing or debugging runs later.
 
+Deliberate Tradeoffs
+--------------------
+
+A few design choices are load-bearing and worth calling out explicitly. They
+are also the places Audax chooses to absorb risk in exchange for keeping the
+review loop autonomous.
+
+Claude implements, Codex reviews
+   The role split is intentional. Informal observation suggests:
+
+   * **Claude** tends to be **more creative and fluent** at drafting specs
+     and producing implementations that thread a large surface area.
+   * **Codex** tends to be **more reliable and grounded** when inspecting
+     real repository state on complex tasks and refusing to sign off on
+     something that is almost-but-not-quite right.
+
+   Audax therefore defaults to Claude on the implementer side and Codex on
+   the reviewer side.
+
+   .. warning::
+
+      **Open to correction.** This pairing is based on informal observation,
+      not a benchmark. If you see the opposite, please open an issue — the
+      roles can be swapped by editing ``audax_core/backends.py``.
+
+Two frontier models at maximum reasoning effort
+   Claude Opus with ``reasoning effort=max`` is paired with Codex
+   ``gpt-5.4`` at ``model_reasoning_effort=xhigh``. Using two top-tier models
+   on opposite sides of the loop makes the review signal meaningful, but it
+   also makes each run expensive and slow relative to a one-shot call to a
+   default model. The constants live at the top of ``audax_core/backends.py``
+   and can be lowered for cheaper runs.
+
+Agent safety rails are disabled by default
+   Both adapters pass the "dangerous" bypass flags so the orchestrator can
+   drive a multi-round implementation and review loop without stopping for
+   per-action approval. Claude runs with ``--dangerously-skip-permissions``
+   and Codex runs with ``--dangerously-bypass-approvals-and-sandbox``. This
+   is safe only inside an environment where autonomous file system writes
+   and shell execution are acceptable, such as a dedicated git worktree, an
+   ephemeral container, or a disposable VM. The mission lock with SHA-256
+   digest verification is the structural guardrail Audax adds on top.
+
+Heartbeat output instead of streamed partial chatter
+   Audax intentionally suppresses raw partial agent output and emits
+   low-frequency ``working...`` / ``still working`` heartbeats. This keeps
+   terminal logs readable and prevents partial model output from being
+   mistaken for a final response, at the cost of giving up a real-time view
+   of what the agent is typing.
+
+External CLI binaries, not direct API calls
+   Audax shells out to the installed ``claude`` and ``codex`` CLIs instead of
+   calling the Anthropic or OpenAI HTTP APIs directly. This piggybacks on the
+   authentication, retry, and model-selection behavior of those CLIs but
+   means Audax cannot run where the binaries are not installed.
+
 Artifact Format Choices
 -----------------------
 

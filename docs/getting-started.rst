@@ -1,6 +1,64 @@
 Getting Started
 ===============
 
+Safety And Cost Warnings
+------------------------
+
+Audax is opinionated, and several of those opinions are dangerous. Read this
+section before pointing it at a repository you care about.
+
+.. warning::
+
+   **Audax runs with agent safety rails disabled.** By default it invokes
+   both agents in modes that skip the interactive permission and sandbox
+   protections the upstream CLIs normally enforce:
+
+   * Claude is launched with ``--dangerously-skip-permissions``
+     (``CLAUDE_SKIP_PERMISSIONS = True`` in ``audax_core/backends.py``).
+     Claude will read, write, and run shell commands against your repository
+     without asking for per-action approval.
+   * Codex is launched with ``--dangerously-bypass-approvals-and-sandbox``
+     (``CODEX_BYPASS_APPROVALS_AND_SANDBOX = True`` in
+     ``audax_core/backends.py``). Codex executes its review without the
+     normal sandbox and approval gates.
+
+   This is a deliberate design choice so the orchestrator can drive both
+   agents through a multi-round implementation and review loop without human
+   intervention in the middle. The practical consequence is that Audax should
+   only run inside an environment where autonomous file system writes and
+   shell execution are acceptable, such as a dedicated git worktree, an
+   ephemeral container, or a disposable VM. Do not point it at a working tree
+   with uncommitted changes you cannot afford to lose.
+
+   Audax does take one structural precaution: after the mission spec is
+   locked, it verifies the SHA-256 digests of the locked markdown and PDF
+   around each implementation round and fails the run if the contract has
+   been mutated.
+
+.. warning::
+
+   **Audax uses frontier models at maximum reasoning effort.** The defaults
+   in ``audax_core/backends.py`` are:
+
+   * Claude: ``model=opus``, ``reasoning effort=max``, streamed JSON output
+     with partial messages enabled.
+   * Codex: ``model=gpt-5.4``, ``model_reasoning_effort=xhigh``, structured
+     JSON output validated against a schema.
+
+   These settings optimize for review quality over price and latency. Expect
+   single runs to be meaningfully more expensive and slower than a one-shot
+   call to a default model, especially once the loop iterates through several
+   rounds of drafting and implementation. If you want cheaper runs, edit the
+   constants at the top of ``audax_core/backends.py`` before running.
+
+.. note::
+
+   Audax does not call the Anthropic or OpenAI APIs directly. It shells out
+   to the ``claude`` and ``codex`` binaries and expects them to be installed,
+   authenticated, and on your ``PATH``. The exact flags Audax passes are
+   visible in ``audax_core/backends.py`` and on the startup card printed
+   before each run.
+
 Prerequisites
 -------------
 
