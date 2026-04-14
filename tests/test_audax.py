@@ -39,7 +39,13 @@ from audax_core.models import (
 )
 from audax_core.progress import QuietProcessRunner
 from audax_core.repo_rules import build_repo_context, discover_rule_files
-from audax_core.ui import render_session_header_card, render_startup_card
+from audax_core.models import ImplementationReview, ReviewIssue
+from audax_core.ui import (
+    parse_markdown_sections,
+    render_implementation_round_report,
+    render_session_header_card,
+    render_startup_card,
+)
 
 
 class FakeClaude:
@@ -1447,6 +1453,175 @@ def test_claude_as_reviewer_missing_required_field_raises_runtime_error(tmp_path
     schema = {"required": ["approved", "summary", "issues"]}
     with pytest.raises(RuntimeError, match="missing required field"):
         _parse_json_text('{"approved": true}', schema, label="x")
+
+
+def test_parse_markdown_sections_collects_bullets_under_headings() -> None:
+    text = """# Title
+## Accomplished
+- A
+- B
+
+## Tests Run
+- pytest -q
+
+Some prose that should be ignored.
+
+## Remaining Risks
+* C
+"""
+    sections = parse_markdown_sections(text)
+    assert sections["Accomplished"] == ["A", "B"]
+    assert sections["Tests Run"] == ["pytest -q"]
+    assert sections["Remaining Risks"] == ["C"]
+
+
+def test_render_implementation_round_report_contains_key_fragments() -> None:
+    review = ImplementationReview(
+        mission_accomplished=False,
+        has_issues=True,
+        summary="Progressing but two criteria unmet.",
+        issues=[
+            ReviewIssue(
+                severity="high",
+                category="test_gap",
+                title="Revocation tests missing",
+                details="No integration coverage for /revoke.",
+                suggested_fix="Add tests/test_revocation.py.",
+            )
+        ],
+        completed_criteria=["Middleware wired", "Rotation live"],
+        remaining_criteria=["Revocation tests", "Runbook updated"],
+        progress_pct=50,
+    )
+    rendered = render_implementation_round_report(
+        round_num=2,
+        implementer_backend="claude",
+        implementer_summary=(
+            "## Accomplished\n- Built middleware\n\n## Tests Run\n- pytest\n\n"
+            "## Remaining Risks\n- Revocation untested\n"
+        ),
+        reviewer_backend="codex",
+        review=review,
+    )
+    # Implementer box
+    assert "Round 2 — Implementer (claude)" in rendered
+    assert "Built middleware" in rendered
+    assert "Revocation untested" in rendered
+    # Reviewer box
+    assert "Round 2 — Reviewer (codex)" in rendered
+    assert "Revocation tests missing" in rendered
+    assert "[HIGH]" in rendered
+    assert "[test_gap]" in rendered
+    # Progress box
+    assert "Round 2 — Progress" in rendered
+    assert "50%" in rendered
+    assert "✓ Completed (2)" in rendered
+    assert "✗ Remaining (2)" in rendered
+    assert "Middleware wired" in rendered
+    assert "Revocation tests" in rendered
+
+
+def test_render_round_report_handles_clean_review() -> None:
+    review = ImplementationReview(
+        mission_accomplished=True,
+        has_issues=False,
+        summary="Mission accomplished.",
+        issues=[],
+        completed_criteria=["A", "B"],
+        remaining_criteria=[],
+        progress_pct=100,
+    )
+    rendered = render_implementation_round_report(
+        round_num=1,
+        implementer_backend="claude",
+        implementer_summary="## Accomplished\n- Shipped\n",
+        reviewer_backend="codex",
+        review=review,
+    )
+    assert "100%" in rendered
+    assert "No outstanding issues." in rendered
+    assert "✓ Completed (2)" in rendered
+    assert "✗ Remaining (0)" in rendered
+
+
+def test_orchestrator_emits_round_report_to_output_stream(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    claude = FakeClaude(
+        [
+            "# Mission\nShip\n\n## Mission Success Criteria\n- Observable\n\n"
+            "## Required Behaviors\n- B\n\n## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n",
+            "## Accomplished\n- Wired middleware\n\n## Tests Run\n- pytest\n\n"
+            "## Remaining Risks\n- None\n",
+        ]
+    )
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+                "completed_criteria": ["Observable criterion met"],
+                "remaining_criteria": [],
+                "progress_pct": 100,
+            },
+        ]
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=output,
+    )
+    orchestrator.run("Ship it")
+    rendered = output.getvalue()
+    assert "Round 1 — Implementer (claude)" in rendered
+    assert "Round 1 — Reviewer (codex)" in rendered
+    assert "Round 1 — Progress" in rendered
+    assert "Wired middleware" in rendered
+
+
+def test_implementation_review_parser_uses_progress_fields() -> None:
+    from audax_core.reviews import parse_implementation_review
+
+    review = parse_implementation_review(
+        {
+            "mission_accomplished": False,
+            "has_issues": True,
+            "summary": "x",
+            "issues": [],
+            "completed_criteria": ["A", "B"],
+            "remaining_criteria": ["C"],
+            "progress_pct": 67,
+        }
+    )
+    assert review.completed_criteria == ["A", "B"]
+    assert review.remaining_criteria == ["C"]
+    assert review.progress_pct == 67
+
+
+def test_implementation_review_parser_derives_progress_when_missing() -> None:
+    from audax_core.reviews import parse_implementation_review
+
+    review = parse_implementation_review(
+        {
+            "mission_accomplished": False,
+            "has_issues": True,
+            "summary": "x",
+            "issues": [],
+            "completed_criteria": ["A"],
+            "remaining_criteria": ["B", "C"],
+        }
+    )
+    # 1 of 3 complete -> 33%
+    assert review.progress_pct == 33
 
 
 def test_orchestrator_uses_current_stdout_by_default(tmp_path: Path) -> None:

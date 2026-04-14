@@ -76,9 +76,27 @@ with:
 * ``has_issues``
 * ``summary``
 * ``issues``
+* ``completed_criteria`` — mission success criteria currently met.
+* ``remaining_criteria`` — mission success criteria still unmet.
+* ``progress_pct`` — integer 0-100 grounded in the completed vs remaining
+  split.
 
 The loop only succeeds when the mission is fully accomplished and no issues
 remain.
+
+After each implementation round, Audax prints a three-box **Round Report** to
+the terminal:
+
+1. **Implementer** — the ``Accomplished`` / ``Tests Run`` / ``Remaining
+   Risks`` sections parsed from the implementer's markdown summary.
+2. **Reviewer** — ``mission_accomplished`` / ``has_issues`` flags, the
+   review summary, and each outstanding issue rendered with severity and
+   category tags.
+3. **Progress** — a color-coded progress bar with the percentage plus a
+   two-column completed-vs-remaining list of criteria.
+
+The boxes use bold labels and color-coded severity tags so the important
+signals are easy to spot without wading through plain text.
 
 Session Forensics
 -----------------

@@ -39,7 +39,11 @@ from .reviews import (
     parse_mission_review,
     render_review_feedback,
 )
-from .ui import render_session_header_card, supports_rich_terminal
+from .ui import (
+    render_implementation_round_report,
+    render_session_header_card,
+    supports_rich_terminal,
+)
 
 
 class ReviewLoopOrchestrator:
@@ -505,6 +509,15 @@ class ReviewLoopOrchestrator:
                 path=implementation_review_path,
                 mission_accomplished=review.mission_accomplished,
                 has_issues=review.has_issues,
+                progress_pct=review.progress_pct,
+            )
+
+            self._emit_round_report(
+                round_num=round_num,
+                implementer_backend=implementer_backend,
+                implementer_summary=implementation_summary,
+                reviewer_backend=impl_reviewer_backend,
+                review=review,
             )
 
             if review.mission_accomplished and not review.has_issues:
@@ -550,6 +563,28 @@ class ReviewLoopOrchestrator:
             f"Implementation rounds max: {self.config.max_implementation_rounds}"
         )
         self._write_line(f"{'=' * 60}")
+
+    def _emit_round_report(
+        self,
+        *,
+        round_num: int,
+        implementer_backend: str,
+        implementer_summary: str,
+        reviewer_backend: str,
+        review: ImplementationReview,
+    ) -> None:
+        """Print the three-box round report for the implementation/review pair."""
+        report = render_implementation_round_report(
+            round_num=round_num,
+            implementer_backend=implementer_backend,
+            implementer_summary=implementer_summary,
+            reviewer_backend=reviewer_backend,
+            review=review,
+        )
+        self.output_stream.write("\n")
+        self.output_stream.write(report)
+        self.output_stream.write("\n")
+        self.output_stream.flush()
 
     def _write_line(self, message: str) -> None:
         """Write a single status line immediately."""

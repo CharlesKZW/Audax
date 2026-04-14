@@ -214,6 +214,11 @@ from repo state.
   `--subprocess-timeout-seconds <n>` if you want a hard ceiling on hung runs.
 - Raw partial agent output is **not** streamed; heartbeat lines show
   activity instead.
+- After each implementation round, Audax prints a three-box **Round Report**
+  to the terminal: Implementer (parsed `Accomplished` / `Tests Run` /
+  `Remaining Risks`), Reviewer (summary + color-coded issues by severity),
+  and Progress (a percentage bar plus a two-column
+  completed-vs-remaining criteria table).
 
 **Per-session artifacts (for ex post analysis):**
 

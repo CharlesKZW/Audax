@@ -37,8 +37,25 @@ def implementation_review_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": issue_schema(include_category=True),
             },
+            "completed_criteria": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "remaining_criteria": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "progress_pct": {"type": "integer", "minimum": 0, "maximum": 100},
         },
-        "required": ["mission_accomplished", "has_issues", "summary", "issues"],
+        "required": [
+            "mission_accomplished",
+            "has_issues",
+            "summary",
+            "issues",
+            "completed_criteria",
+            "remaining_criteria",
+            "progress_pct",
+        ],
         "additionalProperties": False,
     }
 
@@ -74,11 +91,33 @@ def parse_mission_review(payload: dict[str, Any]) -> MissionReview:
 
 def parse_implementation_review(payload: dict[str, Any]) -> ImplementationReview:
     """Convert a raw implementation review payload into a typed model."""
+    completed = [
+        str(item).strip()
+        for item in payload.get("completed_criteria", []) or []
+        if str(item).strip()
+    ]
+    remaining = [
+        str(item).strip()
+        for item in payload.get("remaining_criteria", []) or []
+        if str(item).strip()
+    ]
+    raw_pct = payload.get("progress_pct")
+    try:
+        progress_pct = max(0, min(100, int(raw_pct))) if raw_pct is not None else 0
+    except (TypeError, ValueError):
+        progress_pct = 0
+    if raw_pct is None and (completed or remaining):
+        total = len(completed) + len(remaining)
+        if total:
+            progress_pct = int(round(100 * len(completed) / total))
     return ImplementationReview(
         mission_accomplished=bool(payload.get("mission_accomplished", False)),
         has_issues=bool(payload.get("has_issues", False)),
         summary=str(payload.get("summary", "")).strip(),
         issues=parse_issues(payload.get("issues", []), default_category="issue"),
+        completed_criteria=completed,
+        remaining_criteria=remaining,
+        progress_pct=progress_pct,
     )
 
 
@@ -116,6 +155,9 @@ def implementation_review_to_dict(review: ImplementationReview) -> dict[str, Any
         "has_issues": review.has_issues,
         "summary": review.summary,
         "issues": [asdict(issue) for issue in review.issues],
+        "completed_criteria": list(review.completed_criteria),
+        "remaining_criteria": list(review.remaining_criteria),
+        "progress_pct": review.progress_pct,
     }
 
 

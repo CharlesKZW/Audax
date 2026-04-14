@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import os
@@ -306,6 +306,9 @@ class ImplementationReview:
     has_issues: bool
     summary: str
     issues: list[ReviewIssue]
+    completed_criteria: list[str] = field(default_factory=list)
+    remaining_criteria: list[str] = field(default_factory=list)
+    progress_pct: int = 0
 
 
 @dataclass

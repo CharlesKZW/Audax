@@ -179,5 +179,17 @@ def build_implementation_review_prompt(
         - has_issues is true if there is any bug, missing requirement, repo policy violation, or testing gap.
         - Use issue categories such as bug, missing_requirement, repo_policy, or test_gap.
         - If the implementation is clean but incomplete, still report issues and set mission_accomplished to false.
+
+        Progress reporting (required fields):
+        - completed_criteria: list of short human-readable descriptions of
+          each mission success criterion that is currently met.
+        - remaining_criteria: list of short human-readable descriptions of
+          each mission success criterion that is NOT yet met.
+        - progress_pct: integer 0-100 estimating overall mission completion,
+          grounded in the completed vs remaining split. Use the exact ratio
+          when possible (e.g. 3 of 5 criteria met -> 60).
+        - Draw completed_criteria and remaining_criteria directly from the
+          mission spec's Mission Success Criteria section; together they
+          should cover every criterion exactly once.
         """
     ).strip()
