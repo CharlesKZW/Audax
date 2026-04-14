@@ -43,8 +43,9 @@ Useful runtime options:
   mission is locked.
 * ``--workspace-dir`` moves generated artifacts out of the default
   ``audax_artifacts`` directory.
-* ``--require-approval`` inserts an interactive approval gate before the
-  mission is locked.
+* ``--require-approval`` keeps the default interactive approval gate enabled
+  before the mission is locked.
+* ``--no-require-approval`` disables that approval gate.
 * ``--subprocess-timeout-seconds`` terminates a wedged ``claude`` or ``codex``
   subprocess instead of waiting forever.
 

@@ -17,11 +17,11 @@ Arguments And Options
 
 ``--spec-rounds``
    Maximum number of mission-drafting rounds before the run fails. Default:
-   ``10``.
+   ``3``.
 
 ``--implementation-rounds``
    Maximum number of implementation-review rounds before the run fails.
-   Default: ``50``.
+   Default: ``5``.
 
 ``--workspace-dir``
    Output directory for generated mission artifacts. Audax writes timestamped
@@ -30,6 +30,11 @@ Arguments And Options
 
 ``--require-approval``
    Require an interactive approval decision before the mission spec is locked.
+   Enabled by default.
+
+``--no-require-approval``
+   Disable the interactive mission approval gate and allow Audax to lock the
+   latest draft automatically when spec rounds are exhausted.
 
 ``--heartbeat-seconds``
    Interval between sparse progress updates while Claude or Codex subprocesses
@@ -66,11 +71,11 @@ Run with tighter review bounds and a custom workspace:
      --workspace-dir audax_auth_artifacts \
      "Harden the authentication stack and add integration coverage"
 
-Run with interactive approval enabled:
+Run with interactive approval disabled:
 
 .. code-block:: bash
 
-   python audax.py --require-approval "Refactor the billing webhooks module"
+   python audax.py --no-require-approval "Refactor the billing webhooks module"
 
 Environment
 -----------

@@ -25,10 +25,11 @@ from audax_core import (
 from audax_core.approval import interactive_mission_approval
 from audax_core.artifacts import write_simple_pdf
 from audax_core.backends import ClaudeCLI, parse_claude_stream_output
-from audax_core.app import main, read_task
+from audax_core.app import build_startup_card_info_lines, main, parse_args, read_task
 from audax_core.models import DEFAULT_WORKSPACE_DIR, session_id_from_timestamp
 from audax_core.progress import QuietProcessRunner
 from audax_core.repo_rules import build_repo_context, discover_rule_files
+from audax_core.ui import render_session_header_card, render_startup_card
 
 
 class FakeClaude:
@@ -323,9 +324,24 @@ def test_lock_manifest_detects_mutation(tmp_path: Path) -> None:
         assert_mission_spec_locked(artifacts)
 
 
-def test_failed_spec_run_report_keeps_completed_round_count(tmp_path: Path) -> None:
+def test_parse_args_defaults_use_shorter_rounds_and_require_approval() -> None:
+    args = parse_args([])
+
+    assert args.spec_rounds == 3
+    assert args.implementation_rounds == 5
+    assert args.require_approval is True
+
+
+def test_parse_args_can_disable_approval() -> None:
+    args = parse_args(["--no-require-approval"])
+
+    assert args.require_approval is False
+
+
+def test_exhausted_spec_rounds_ship_latest_draft_for_approval(tmp_path: Path) -> None:
     repo_root = tmp_path
     artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
 
     claude = FakeClaude(
         [
@@ -333,6 +349,7 @@ def test_failed_spec_run_report_keeps_completed_round_count(tmp_path: Path) -> N
             "## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n",
             "# Mission\nTwo\n\n## Mission Success Criteria\n- A\n\n## Required Behaviors\n- B\n\n"
             "## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n",
+            "## Accomplished\n- done\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- none\n",
         ]
     )
     codex = FakeCodex(
@@ -361,6 +378,12 @@ def test_failed_spec_run_report_keeps_completed_round_count(tmp_path: Path) -> N
                     }
                 ],
             },
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Mission complete.",
+                "issues": [],
+            },
         ]
     )
 
@@ -370,22 +393,89 @@ def test_failed_spec_run_report_keeps_completed_round_count(tmp_path: Path) -> N
             workspace_dir=repo_root / DEFAULT_WORKSPACE_DIR,
             max_spec_rounds=2,
             max_implementation_rounds=4,
+            require_mission_approval=True,
             heartbeat_seconds=0.01,
         ),
         artifacts=artifacts,
         claude=claude,
         codex=codex,
         approval_gate=lambda *_: ApprovalDecision(approved=True),
-        output_stream=io.StringIO(),
+        output_stream=output,
     )
 
-    with pytest.raises(RuntimeError, match="Mission spec failed to converge within 2 round\\(s\\)"):
-        orchestrator.run("Build feature Z")
+    result = orchestrator.run("Build feature Z")
 
+    assert result.success is True
     report = json.loads(artifacts.report_path.read_text(encoding="utf-8"))
     assert report["mission_spec_rounds"] == 2
-    assert report["implementation_rounds"] == 0
-    assert report["error"] == "Mission spec failed to converge within 2 round(s)"
+    assert report["implementation_rounds"] == 1
+    assert report["error"] == ""
+    assert report["latest_mission_spec_review_approved"] is False
+    assert "Still too weak." in report["latest_mission_spec_review_feedback"]
+    assert artifacts.mission_spec_lock.exists()
+    rendered = output.getvalue()
+    assert "shipping the latest draft for final approval" in rendered
+    assert "latest Codex reject message" in rendered
+    assert "Still too weak." in rendered
+
+
+def test_exhausted_spec_rounds_lock_latest_draft_when_approval_disabled(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    claude = FakeClaude(
+        [
+            "# Mission\nOne\n\n## Mission Success Criteria\n- A\n\n## Required Behaviors\n- B\n\n"
+            "## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n",
+            "## Accomplished\n- done\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- none\n",
+        ]
+    )
+    codex = FakeCodex(
+        [
+            {
+                "approved": False,
+                "summary": "Needs follow-up.",
+                "issues": [
+                    {
+                        "severity": "medium",
+                        "title": "Missing detail",
+                        "details": "Tighten the criteria.",
+                        "suggested_fix": "Be specific.",
+                    }
+                ],
+            },
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Mission complete.",
+                "issues": [],
+            },
+        ]
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=LoopConfig(
+            repo_root=repo_root,
+            workspace_dir=repo_root / DEFAULT_WORKSPACE_DIR,
+            max_spec_rounds=1,
+            max_implementation_rounds=2,
+            require_mission_approval=False,
+            heartbeat_seconds=0.01,
+        ),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: (_ for _ in ()).throw(AssertionError("approval gate should not run")),
+        output_stream=output,
+    )
+
+    result = orchestrator.run("Build feature auto-lock")
+
+    assert result.success is True
+    rendered = output.getvalue()
+    assert "locking the latest draft with unresolved review feedback" in rendered
+    assert "Needs follow-up." in rendered
 
 
 def test_failed_implementation_run_report_keeps_completed_round_count(tmp_path: Path) -> None:
@@ -534,6 +624,41 @@ def test_heartbeat_progress_uses_current_stdout_by_default() -> None:
     assert "[stdout capture] done (1s)" in rendered
 
 
+def test_heartbeat_progress_uses_inline_spinner_for_tty() -> None:
+    class FakeClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    clock = FakeClock()
+    stream = FakeTTY()
+    progress = HeartbeatProgress(
+        "tty capture",
+        interval_seconds=5.0,
+        stream=stream,
+        clock=clock,
+    )
+
+    progress.start()
+    clock.now = 0.1
+    progress.maybe_emit()
+    clock.now = 1.0
+    progress.finish(success=True)
+
+    rendered = stream.getvalue()
+    assert "\r[tty capture] | working (0s)" in rendered
+    assert "\r[tty capture] / working (0s)" in rendered
+    assert "\r[tty capture] done (1s)" in rendered
+    assert rendered.endswith("\n")
+    assert "still working" not in rendered
+
+
 def test_quiet_process_runner_times_out_long_running_process(tmp_path: Path) -> None:
     runner = QuietProcessRunner(
         heartbeat_seconds=0.01,
@@ -566,6 +691,29 @@ def test_quiet_process_runner_uses_current_stdout_by_default(tmp_path: Path) -> 
     assert "runner ok" in output
     assert "[stdout runner test] working..." in rendered
     assert "[stdout runner test] done" in rendered
+
+
+def test_quiet_process_runner_uses_inline_spinner_for_tty(tmp_path: Path) -> None:
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stream = FakeTTY()
+    runner = QuietProcessRunner(
+        heartbeat_seconds=5.0,
+        progress_stream=stream,
+    )
+    output = runner.run(
+        [sys.executable, "-c", "import time; time.sleep(0.25); print('runner ok')"],
+        "tty runner test",
+        cwd=tmp_path,
+    )
+
+    rendered = stream.getvalue()
+    assert "runner ok" in output
+    assert "\r[tty runner test]" in rendered
+    assert "still working" not in rendered
+    assert rendered.endswith("\n")
 
 
 def test_quiet_process_runner_interrupt_kills_process_group(
@@ -750,6 +898,10 @@ def test_claude_cli_sends_prompt_via_stdin_instead_of_argv(tmp_path: Path) -> No
         "-p",
         "--input-format",
         "text",
+        "--model",
+        "opus",
+        "--effort",
+        "max",
         "--dangerously-skip-permissions",
         "--output-format",
         "stream-json",
@@ -839,6 +991,67 @@ def test_orchestrator_uses_current_stdout_by_default(tmp_path: Path) -> None:
     assert "[Mission] locked at" in rendered
 
 
+def test_render_session_header_card_uses_box_layout() -> None:
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    config = LoopConfig(
+        repo_root=Path("/tmp/repo"),
+        workspace_dir=Path("/tmp/repo/audax_artifacts"),
+        max_spec_rounds=10,
+        max_implementation_rounds=50,
+        require_mission_approval=True,
+    )
+    rendered = render_session_header_card(
+        "Build a dashboard for 潜能恒信 with prices, news, sentiment, vol, and returns",
+        config,
+        FakeTTY(),
+    )
+
+    assert "AUDAX COLLABORATIVE MISSION LOOP" in rendered
+    assert "Task:" in rendered
+    assert "Repo:" in rendered
+    assert "Workspace:" in rendered
+    assert "Mission approval: required" in rendered
+    assert "╭" in rendered and "╰" in rendered
+
+
+def test_render_startup_card_uses_box_layout() -> None:
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    args = argparse.Namespace(
+        spec_rounds=6,
+        implementation_rounds=20,
+        workspace_dir="custom_artifacts",
+        require_approval=True,
+        heartbeat_seconds=2.5,
+        subprocess_timeout_seconds=0,
+        claude_cmd="claude-custom",
+        codex_cmd="codex-custom",
+    )
+    rendered = render_startup_card(
+        FakeTTY(),
+        build_startup_card_info_lines(args, repo_root=Path("/tmp/repo")),
+    )
+
+    assert "AUDAX CONSOLE" in rendered
+    assert "Enter the mission prompt for Audax." in rendered
+    assert "Audax will make changes in: /tmp/repo" in rendered
+    assert "--spec-rounds: 6" in rendered
+    assert "--subprocess-timeout-seconds: disabled" in rendered
+    assert "--require-approval/--no-require-approval: enabled" in rendered
+    assert "Claude runtime selected by Audax:" in rendered
+    assert "Codex runtime selected by Audax:" in rendered
+    assert "model: opus" in rendered
+    assert "reasoning effort: max" in rendered
+    assert "model: gpt-5.4" in rendered
+    assert "reasoning effort: xhigh" in rendered
+    assert "╭" in rendered and "╰" in rendered
+
+
 def test_build_repo_context_handles_symlinked_repo_root(tmp_path: Path) -> None:
     real_repo_root = tmp_path / "real_repo"
     real_repo_root.mkdir()
@@ -923,6 +1136,45 @@ def test_read_task_prompts_for_stdin(monkeypatch: pytest.MonkeyPatch, capsys: py
     assert task == "build the thing"
     assert "Enter the mission prompt for Audax." in captured.out
     assert "Press Ctrl-D when you are done." in captured.out
+
+
+def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.chdir(Path("/tmp"))
+    stdout = FakeTTY()
+    monkeypatch.setattr("sys.stdout", stdout)
+    monkeypatch.setattr("sys.stdin", io.StringIO("build the thing"))
+
+    task = read_task(
+        argparse.Namespace(
+            task=[],
+            spec_rounds=7,
+            implementation_rounds=12,
+            workspace_dir="session_artifacts",
+            require_approval=True,
+            heartbeat_seconds=1.5,
+            subprocess_timeout_seconds=45,
+            claude_cmd="claude-enterprise",
+            codex_cmd="codex-enterprise",
+        )
+    )
+
+    rendered = stdout.getvalue()
+    assert task == "build the thing"
+    assert "AUDAX CONSOLE" in rendered
+    assert "Enter the mission prompt for Audax." in rendered
+    assert "Press Ctrl-D when you are done." in rendered
+    assert "Audax will make changes in:" in rendered
+    assert "--implementation-rounds: 12" in rendered
+    assert "--claude-cmd: claude-enterprise" in rendered
+    assert "--require-approval/--no-require-approval: enabled" in rendered
+    assert "model: opus" in rendered
+    assert "reasoning effort: max" in rendered
+    assert "approvals/sandbox: dangerously-bypass-approvals-and-sandbox" in rendered
+    assert "╭" in rendered and "╰" in rendered
 
 
 def test_user_approval_feedback_survives_subsequent_codex_rejection(tmp_path: Path) -> None:

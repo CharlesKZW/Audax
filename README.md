@@ -24,9 +24,9 @@ python audax.py "Add JWT auth middleware with refresh token rotation"
 
 Useful flags:
 
-- `--spec-rounds 10`
-- `--implementation-rounds 50`
-- `--require-approval`
+- `--spec-rounds 3`
+- `--implementation-rounds 5`
+- `--require-approval` / `--no-require-approval`
 - `--workspace-dir audax_artifacts`
 - `--heartbeat-seconds 5`
 - `--subprocess-timeout-seconds 1800` (use `0` to disable)
@@ -35,7 +35,8 @@ Useful flags:
 
 - Claude drafts `mission_spec.md`
 - Codex reviews the draft against the request and repo rules
-- Optional user approval happens before the mission is locked
+- User approval is required by default before the mission is locked
+- If the spec still has open Codex objections when spec rounds are exhausted, Audax ships the latest draft for a final human decision and shows the latest reject message
 - Each run creates a timestamped session directory under `audax_artifacts/sessions/`
 - The mission is locked as `mission_spec.md`, `mission_spec.pdf`, and `mission_spec.lock.json` inside that session
 - Claude implements against the locked mission

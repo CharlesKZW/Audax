@@ -37,6 +37,7 @@ from .reviews import (
     parse_mission_review,
     render_review_feedback,
 )
+from .ui import render_session_header_card, supports_rich_terminal
 
 
 class ReviewLoopOrchestrator:
@@ -60,12 +61,18 @@ class ReviewLoopOrchestrator:
         self.output_stream = output_stream or sys.stdout
         self._mission_spec_rounds_run = 0
         self._implementation_rounds_run = 0
+        self._latest_mission_spec_review_approved: bool | None = None
+        self._latest_mission_spec_review_summary = ""
+        self._latest_mission_spec_review_feedback = ""
         self.artifacts.ensure_directories()
 
     def run(self, task: str) -> RunSummary:
         """Execute the full mission lifecycle and persist a run report."""
         self._mission_spec_rounds_run = 0
         self._implementation_rounds_run = 0
+        self._latest_mission_spec_review_approved = None
+        self._latest_mission_spec_review_summary = ""
+        self._latest_mission_spec_review_feedback = ""
         final_summary = ""
         error = ""
         success = False
@@ -116,6 +123,9 @@ class ReviewLoopOrchestrator:
                 event_log_path=str(self.artifacts.event_log_path),
                 session_manifest_path=str(self.artifacts.session_manifest_path),
                 report_path=str(self.artifacts.report_path),
+                latest_mission_spec_review_approved=self._latest_mission_spec_review_approved,
+                latest_mission_spec_review_summary=self._latest_mission_spec_review_summary,
+                latest_mission_spec_review_feedback=self._latest_mission_spec_review_feedback,
             )
         except KeyboardInterrupt:
             interrupted = True
@@ -144,6 +154,9 @@ class ReviewLoopOrchestrator:
                 session_manifest_path=str(self.artifacts.session_manifest_path),
                 report_path=str(self.artifacts.report_path),
                 error=error,
+                latest_mission_spec_review_approved=self._latest_mission_spec_review_approved,
+                latest_mission_spec_review_summary=self._latest_mission_spec_review_summary,
+                latest_mission_spec_review_feedback=self._latest_mission_spec_review_feedback,
             )
             self.artifacts.write_json(self.artifacts.report_path, asdict(report))
             self._write_session_manifest(
@@ -259,12 +272,24 @@ class ReviewLoopOrchestrator:
                 path=review_path,
                 approved=review.approved,
             )
+            self._latest_mission_spec_review_approved = review.approved
+            self._latest_mission_spec_review_summary = review.summary
 
             if not review.approved:
                 codex_feedback = render_review_feedback(review.issues, summary=review.summary)
-                continue
+                self._latest_mission_spec_review_feedback = codex_feedback
+                if round_num < self.config.max_spec_rounds:
+                    continue
+                return self._finalize_mission_spec_after_round_limit(
+                    task=task,
+                    current_spec=current_spec,
+                    round_num=round_num,
+                    reject_summary=review.summary,
+                    reject_feedback=codex_feedback,
+                )
 
             codex_feedback = ""
+            self._latest_mission_spec_review_feedback = ""
             if self.config.require_mission_approval:
                 decision = self.approval_gate(current_spec, self.artifacts.mission_spec_md)
                 if decision.aborted:
@@ -272,25 +297,18 @@ class ReviewLoopOrchestrator:
                 if not decision.approved:
                     if not decision.feedback.strip():
                         raise RuntimeError("Mission approval requested changes but no feedback was provided")
+                    if round_num >= self.config.max_spec_rounds:
+                        raise RuntimeError(
+                            "Mission approval requested changes after max spec rounds:\n"
+                            f"{decision.feedback.strip()}"
+                        )
                     user_feedback = decision.feedback.strip()
                     continue
 
-            locked_spec = lock_mission_spec(current_spec, self.artifacts, task)
-            self.artifacts.append_event(
-                "mission_locked",
-                mission_spec_md=self.artifacts.mission_spec_md,
-                mission_spec_pdf=self.artifacts.mission_spec_pdf,
-                mission_spec_lock=self.artifacts.mission_spec_lock,
-                markdown_sha256=locked_spec.markdown_sha256,
-                pdf_sha256=locked_spec.pdf_sha256,
+            return self._lock_current_mission_spec(
+                current_spec,
+                task=task,
             )
-            self._write_line(
-                f"[Mission] locked at {self.artifacts.mission_spec_pdf} "
-                f"(sha256 {locked_spec.markdown_sha256[:12]}...)"
-            )
-            return locked_spec
-
-        raise RuntimeError(f"Mission spec failed to converge within {self.config.max_spec_rounds} round(s)")
 
     def _run_implementation_loop(
         self,
@@ -405,6 +423,16 @@ class ReviewLoopOrchestrator:
 
     def _print_header(self, task: str) -> None:
         """Render a short run header to the configured output stream."""
+        if supports_rich_terminal(self.output_stream):
+            self.output_stream.write(
+                render_session_header_card(
+                    task,
+                    self.config,
+                    self.output_stream,
+                )
+            )
+            self.output_stream.flush()
+            return
         self._write_line(f"{'=' * 60}")
         self._write_line("Audax collaborative mission loop")
         self._write_line(f"Task: {task}")
@@ -421,6 +449,93 @@ class ReviewLoopOrchestrator:
         self.output_stream.write(f"{message}\n")
         self.output_stream.flush()
 
+    def _lock_current_mission_spec(
+        self,
+        current_spec: str,
+        *,
+        task: str,
+        locked_after_round_limit: bool = False,
+    ) -> LockedMissionSpec:
+        """Lock the current mission spec and persist the event trail."""
+        locked_spec = lock_mission_spec(current_spec, self.artifacts, task)
+        self.artifacts.append_event(
+            "mission_locked",
+            mission_spec_md=self.artifacts.mission_spec_md,
+            mission_spec_pdf=self.artifacts.mission_spec_pdf,
+            mission_spec_lock=self.artifacts.mission_spec_lock,
+            markdown_sha256=locked_spec.markdown_sha256,
+            pdf_sha256=locked_spec.pdf_sha256,
+            locked_after_round_limit=locked_after_round_limit,
+            latest_review_approved=self._latest_mission_spec_review_approved,
+            latest_review_summary=self._latest_mission_spec_review_summary,
+            latest_review_feedback=self._latest_mission_spec_review_feedback,
+        )
+        self._write_line(
+            f"[Mission] locked at {self.artifacts.mission_spec_pdf} "
+            f"(sha256 {locked_spec.markdown_sha256[:12]}...)"
+        )
+        return locked_spec
+
+    def _finalize_mission_spec_after_round_limit(
+        self,
+        *,
+        task: str,
+        current_spec: str,
+        round_num: int,
+        reject_summary: str,
+        reject_feedback: str,
+    ) -> LockedMissionSpec:
+        """Ship the last mission draft for final handling after spec rounds are exhausted."""
+        self.artifacts.append_event(
+            "mission_spec_round_limit_reached",
+            round=round_num,
+            mission_spec_md=self.artifacts.mission_spec_md,
+            require_mission_approval=self.config.require_mission_approval,
+            latest_review_summary=reject_summary,
+            latest_review_feedback=reject_feedback,
+        )
+        if self.config.require_mission_approval:
+            self._write_line(
+                f"[Mission] spec rounds exhausted after {round_num} round(s); "
+                "shipping the latest draft for final approval"
+            )
+            self._emit_latest_mission_reject_message(reject_summary, reject_feedback)
+            decision = self.approval_gate(current_spec, self.artifacts.mission_spec_md)
+            if decision.aborted:
+                raise RuntimeError("Mission approval aborted by user")
+            if not decision.approved:
+                if not decision.feedback.strip():
+                    raise RuntimeError(
+                        "Mission approval requested changes after max spec rounds "
+                        "but no feedback was provided"
+                    )
+                raise RuntimeError(
+                    "Mission approval requested changes after max spec rounds:\n"
+                    f"{decision.feedback.strip()}"
+                )
+        else:
+            self._write_line(
+                f"[Mission] spec rounds exhausted after {round_num} round(s); "
+                "locking the latest draft with unresolved review feedback"
+            )
+            self._emit_latest_mission_reject_message(reject_summary, reject_feedback)
+
+        return self._lock_current_mission_spec(
+            current_spec,
+            task=task,
+            locked_after_round_limit=True,
+        )
+
+    def _emit_latest_mission_reject_message(self, summary: str, feedback: str) -> None:
+        """Write the last mission-spec rejection details for human review."""
+        if feedback.strip():
+            self._write_line("[Mission] latest Codex reject message:")
+            for line in feedback.splitlines():
+                self._write_line(f"  {line}" if line else "")
+            return
+        if summary.strip():
+            self._write_line(f"[Mission] latest Codex reject summary: {summary.strip()}")
+
     def _config_snapshot(self) -> dict[str, object]:
         return {
             "repo_root": str(self.config.repo_root),
@@ -432,6 +547,13 @@ class ReviewLoopOrchestrator:
             "subprocess_timeout_seconds": self.config.subprocess_timeout_seconds,
             "claude_cmd": self.config.claude_cmd,
             "codex_cmd": self.config.codex_cmd,
+        }
+
+    def _mission_spec_review_snapshot(self) -> dict[str, object]:
+        return {
+            "approved": self._latest_mission_spec_review_approved,
+            "summary": self._latest_mission_spec_review_summary,
+            "feedback": self._latest_mission_spec_review_feedback,
         }
 
     def _write_session_manifest(
@@ -459,6 +581,7 @@ class ReviewLoopOrchestrator:
                 "workspace_dir": str(self.config.workspace_dir),
                 "session_dir": str(self.artifacts.session_dir),
                 "config": self._config_snapshot(),
+                "mission_spec_review": self._mission_spec_review_snapshot(),
                 "artifacts": {
                     "session_manifest_path": str(self.artifacts.session_manifest_path),
                     "event_log_path": str(self.artifacts.event_log_path),

@@ -17,6 +17,8 @@ from .models import DEFAULT_HEARTBEAT_SECONDS
 class HeartbeatProgress:
     """Print sparse progress updates without streaming raw agent output."""
 
+    SPINNER_FRAMES = ("|", "/", "-", "\\")
+
     def __init__(
         self,
         label: str,
@@ -30,17 +32,33 @@ class HeartbeatProgress:
         self.clock = clock
         self.started_at: float | None = None
         self.last_update: float | None = None
+        self._spinner_index = 0
+        self._last_inline_width = 0
+        self._inline_updates = self._supports_inline_updates(self.stream)
+
+    @property
+    def uses_inline_updates(self) -> bool:
+        """Return whether the current stream supports in-place progress updates."""
+        return self._inline_updates
 
     def start(self) -> None:
         now = self.clock()
         self.started_at = now
         self.last_update = now
+        if self._inline_updates:
+            self._write_inline(self._working_message())
+            return
         self._write(f"[{self.label}] working...")
 
     def maybe_emit(self) -> None:
         if self.started_at is None or self.last_update is None:
             return
         now = self.clock()
+        if self._inline_updates:
+            self.last_update = now
+            self._spinner_index = (self._spinner_index + 1) % len(self.SPINNER_FRAMES)
+            self._write_inline(self._working_message())
+            return
         if self.interval_seconds and (now - self.last_update) >= self.interval_seconds:
             self.last_update = now
             self._write(f"[{self.label}] still working ({int(now - self.started_at)}s elapsed)")
@@ -50,11 +68,45 @@ class HeartbeatProgress:
             return
         status = "done" if success else "failed"
         elapsed = int(self.clock() - self.started_at)
+        if self._inline_updates:
+            self._write_inline(f"[{self.label}] {status} ({elapsed}s)", final=True)
+            return
         self._write(f"[{self.label}] {status} ({elapsed}s)")
+
+    def _working_message(self) -> str:
+        """Render the current in-progress status message."""
+        assert self.started_at is not None
+        elapsed = int(self.clock() - self.started_at)
+        frame = self.SPINNER_FRAMES[self._spinner_index]
+        return f"[{self.label}] {frame} working ({elapsed}s)"
 
     def _write(self, message: str) -> None:
         self.stream.write(f"{message}\n")
         self.stream.flush()
+
+    def _write_inline(self, message: str, *, final: bool = False) -> None:
+        """Render an inline status line, padding to overwrite prior content."""
+        padding = ""
+        if len(message) < self._last_inline_width:
+            padding = " " * (self._last_inline_width - len(message))
+        self.stream.write(f"\r{message}{padding}")
+        if final:
+            self.stream.write("\n")
+            self._last_inline_width = 0
+        else:
+            self._last_inline_width = len(message)
+        self.stream.flush()
+
+    @staticmethod
+    def _supports_inline_updates(stream: TextIO) -> bool:
+        """Return whether a stream supports carriage-return style updates."""
+        isatty = getattr(stream, "isatty", None)
+        if not callable(isatty):
+            return False
+        try:
+            return bool(isatty())
+        except OSError:
+            return False
 
 
 class QuietProcessRunner:
@@ -131,7 +183,9 @@ class QuietProcessRunner:
                 proc.stdin.write(stdin_text)
                 proc.stdin.close()
 
-            sleep_seconds = 0.2 if self.heartbeat_seconds <= 0 else min(0.5, self.heartbeat_seconds / 2)
+            sleep_seconds = 0.1 if progress.uses_inline_updates else (
+                0.2 if self.heartbeat_seconds <= 0 else min(0.5, self.heartbeat_seconds / 2)
+            )
             while proc.poll() is None:
                 time.sleep(sleep_seconds)
                 progress.maybe_emit()

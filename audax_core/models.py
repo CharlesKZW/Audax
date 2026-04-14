@@ -10,8 +10,8 @@ from pathlib import Path
 import threading
 from typing import Any, Protocol
 
-DEFAULT_SPEC_ROUNDS = 10
-DEFAULT_IMPLEMENTATION_ROUNDS = 50
+DEFAULT_SPEC_ROUNDS = 3
+DEFAULT_IMPLEMENTATION_ROUNDS = 5
 DEFAULT_HEARTBEAT_SECONDS = 5.0
 DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 1800.0
 DEFAULT_WORKSPACE_DIR = "audax_artifacts"
@@ -86,7 +86,7 @@ class LoopConfig:
     workspace_dir: Path
     max_spec_rounds: int = DEFAULT_SPEC_ROUNDS
     max_implementation_rounds: int = DEFAULT_IMPLEMENTATION_ROUNDS
-    require_mission_approval: bool = False
+    require_mission_approval: bool = True
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     subprocess_timeout_seconds: float | None = DEFAULT_SUBPROCESS_TIMEOUT_SECONDS
     claude_cmd: str = CLAUDE_CMD
@@ -308,6 +308,9 @@ class RunSummary:
     session_manifest_path: str
     report_path: str
     error: str = ""
+    latest_mission_spec_review_approved: bool | None = None
+    latest_mission_spec_review_summary: str = ""
+    latest_mission_spec_review_feedback: str = ""
 
 
 class ClaudeBackend(Protocol):

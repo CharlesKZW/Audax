@@ -12,7 +12,7 @@ phases:
    user task
      -> Claude drafts mission_spec.md
      -> Codex reviews the draft against the task and repo rules
-     -> optional human approval
+     -> human approval by default
      -> mission spec is locked as markdown + PDF + checksum manifest
      -> Claude implements against the locked mission
      -> Codex reviews the live repository state
@@ -33,12 +33,14 @@ Claude is then asked to produce a markdown file with a strict structure:
 
 Codex reviews that draft through a JSON schema instead of free-form prose. If
 Codex rejects the draft, Audax renders the issues into compact feedback and
-feeds them into the next Claude round.
+feeds them into the next Claude round. If the drafting budget is exhausted
+before Codex approves, Audax ships the latest draft for a final human decision
+and surfaces the latest reject message.
 
 Mission Approval And Locking
 ----------------------------
 
-If ``--require-approval`` is enabled, a user can:
+By default, a user can:
 
 * approve the draft and continue,
 * request changes with explicit feedback, or
