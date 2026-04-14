@@ -34,8 +34,8 @@ requirements, catch regressions, and steer the agent back on track.
 Audax replaces that ad hoc loop with a disciplined one:
 
 * **Locked contract up front.** The human states the mission once and
-  approves a locked specification (markdown + PDF + SHA-256 manifest) before
-  any code is written.
+  approves a locked specification (markdown + SHA-256 manifest) before any
+  code is written.
 * **Claude does the building.** Drafting and implementation run on a single
   strong implementer model.
 * **Codex plays the reviewer role the human would otherwise play.** Reviews
@@ -141,16 +141,19 @@ What Audax Guarantees
 ---------------------
 
 * **Locked mission contract.** The spec is reviewed before implementation
-  and then locked as markdown, PDF, and a checksum manifest. The
-  orchestrator verifies the digest of both locked artifacts around every
-  implementation round and fails fast if the contract has been mutated.
+  and then locked as markdown plus a SHA-256 checksum manifest. The
+  orchestrator verifies the markdown digest around every implementation
+  round and fails fast if the contract has been mutated.
 * **Centralized backend behavior.** Claude and Codex run through explicit
   CLI adapters instead of ad hoc shell glue, so the exact flags used are
   visible in ``audax_core/backends.py`` and on the startup card.
 * **Inspectable failures.** Review loops persist both Claude summaries and
   Codex JSON reviews, so every run is auditable after the fact.
-* **Bounded subprocesses.** Hung agent CLI subprocesses are cut off by a
-  configurable timeout instead of stalling the mission forever.
+* **Opt-in subprocess timeout.** No subprocess timeout by default; pass
+  ``--subprocess-timeout-seconds`` to cap hung agent CLIs.
+* **Resumable sessions.** ``python audax.py continue`` re-enters an
+  interrupted session against its already-locked mission spec, without
+  re-drafting or re-approving.
 
 .. toctree::
    :hidden:

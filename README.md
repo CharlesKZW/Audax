@@ -1,5 +1,7 @@
 # Audax
 
+[![Documentation Status](https://readthedocs.org/projects/audax-implement-review/badge/?version=latest)](https://audax-implement-review.readthedocs.io/en/latest/?badge=latest)
+
 > **Audax lands _audacious_ engineering changes and features that a single frontier agent
 > can rarely pull off in one shot.**
 
@@ -58,7 +60,7 @@ user task
   ─▶ Claude drafts mission_spec.md
   ─▶ Codex reviews the draft against the task and repo rules
   ─▶ human approval (default)
-  ─▶ mission spec is locked as markdown + PDF + SHA-256 checksum manifest
+  ─▶ mission spec is locked as markdown + SHA-256 checksum manifest
   ─▶ Claude implements against the locked mission
   ─▶ Codex reviews the live repository state (structured JSON)
   ─▶ repeat until success or round limit
@@ -153,8 +155,26 @@ python audax.py "Add JWT auth middleware with refresh token rotation"
 - `--require-approval` / `--no-require-approval`
 - `--workspace-dir audax_artifacts`
 - `--heartbeat-seconds 5`
-- `--subprocess-timeout-seconds 1800` (use `0` to disable)
+- `--subprocess-timeout-seconds` (no timeout by default; set a number to cap hung subprocesses, or `0` to explicitly disable)
 - `--claude-cmd` / `--codex-cmd` to override the backend CLI names
+
+### Resuming An Interrupted Session
+
+If a session is killed mid-implementation (Ctrl-C, SIGTERM, crash, reboot),
+you can pick it back up without re-drafting the mission spec:
+
+```bash
+python audax.py continue                     # resume the most recent incomplete session
+python audax.py continue 20260413T181500Z_pid42   # resume a specific session
+```
+
+Only sessions that already have a locked mission spec
+(`mission_spec.lock.json`) are resumable. The SHA-256 digest in the lock
+manifest is re-verified before any implementation round runs, so resume will
+refuse to continue if `mission_spec.md` has been tampered with.
+
+Drafting and approval are skipped on resume — the locked contract from the
+original session is reused as-is, and only the implementation loop runs.
 
 ---
 
@@ -168,14 +188,14 @@ python audax.py "Add JWT auth middleware with refresh token rotation"
   reject message.
 - Each run creates a timestamped session directory under
   `audax_artifacts/sessions/`.
-- The mission is locked as `mission_spec.md`, `mission_spec.pdf`, and
-  `mission_spec.lock.json` inside that session.
+- The mission is locked as `mission_spec.md` and `mission_spec.lock.json`
+  (SHA-256 manifest) inside that session.
 - Claude implements against the locked mission.
 - Codex reviews for bugs, missing requirements, repo-policy gaps, and test
   gaps.
 - The loop repeats until success or the implementation round limit is hit.
-- Each Claude/Codex subprocess is timed out after **1800 seconds** by default
-  to avoid hung runs.
+- Claude/Codex subprocesses have **no timeout** by default. Pass
+  `--subprocess-timeout-seconds <n>` if you want a hard ceiling on hung runs.
 - Raw partial agent output is **not** streamed; heartbeat lines show
   activity instead.
 
@@ -222,9 +242,10 @@ AUDAX_RUN_LIVE_CLI_TESTS=1 pytest -q tests/test_live_cli.py
 
 ## Documentation
 
-Full documentation is hosted on Read the Docs. Refer to the web
-documentation for the workflow, architecture, CLI reference, and API
-reference.
+Full documentation is hosted on Read the Docs:
+**<https://audax-implement-review.readthedocs.io/en/latest/>**
+
+It covers the workflow, architecture, CLI reference, and API reference.
 
 ---
 

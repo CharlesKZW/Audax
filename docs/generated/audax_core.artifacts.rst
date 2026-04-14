@@ -10,8 +10,5 @@
    
       assert_mission_spec_locked
       lock_mission_spec
-      pdf_escape
       sha256_file
-      wrap_text_lines
-      write_simple_pdf
    

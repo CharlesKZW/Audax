@@ -7,6 +7,7 @@ Synopsis
 .. code-block:: text
 
    python audax.py [options] [task ...]
+   python audax.py continue [options] [session_id]
 
 Arguments And Options
 ---------------------
@@ -41,8 +42,10 @@ Arguments And Options
    are running. Default: ``5`` seconds.
 
 ``--subprocess-timeout-seconds``
-   Hard timeout for each Claude or Codex subprocess. Default: ``1800`` seconds.
-   Use ``0`` to disable the timeout.
+   Hard timeout for each Claude or Codex subprocess, in seconds. **Unset by
+   default**, which means Audax never kills an agent subprocess on its own.
+   Pass a positive number to cap hung runs, or ``0`` to explicitly disable
+   the timeout.
 
 ``--claude-cmd``
    Override the Claude CLI executable name or path. Defaults to ``claude`` or
@@ -76,6 +79,46 @@ Run with interactive approval disabled:
 .. code-block:: bash
 
    python audax.py --no-require-approval "Refactor the billing webhooks module"
+
+The ``continue`` Subcommand
+---------------------------
+
+Resume an interrupted session against its already-locked mission spec
+instead of starting a fresh one. Only sessions that have a
+``mission_spec.lock.json`` and have not already succeeded are resumable.
+The SHA-256 digest in the lock manifest is re-verified before the
+implementation loop restarts, so a mutated ``mission_spec.md`` causes the
+resume to fail fast.
+
+.. code-block:: bash
+
+   python audax.py continue
+   python audax.py continue 20260413T181500Z_pid42
+
+``session_id`` (positional, optional)
+   Session directory name under ``audax_artifacts/sessions/``. When omitted,
+   the most recent incomplete session in the workspace is resumed.
+
+``--implementation-rounds``
+   Maximum number of implementation-review rounds in the resumed run.
+   Default: ``5``.
+
+``--workspace-dir``
+   Workspace root to scan for the session. Default: ``audax_artifacts``.
+
+``--heartbeat-seconds``
+   Interval between sparse progress updates. Default: ``5`` seconds.
+
+``--subprocess-timeout-seconds``
+   Same semantics as the fresh-run flag. Unset by default.
+
+``--claude-cmd`` / ``--codex-cmd``
+   Override the backend CLI executables.
+
+Drafting and approval are skipped on resume; only the implementation loop
+runs. New prompt and output artifacts are written into the existing session
+directory with fresh timestamps, and an explicit ``session_resumed`` event
+is appended to ``events.jsonl`` so the chronology is preserved.
 
 Environment
 -----------

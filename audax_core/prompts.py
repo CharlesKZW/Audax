@@ -17,14 +17,14 @@ def build_mission_spec_prompt(
 ) -> str:
     """Construct the Claude prompt used to draft or revise ``mission_spec.md``."""
     mode_instructions = (
-        "Create a new draft for mission_spec.md."
+        "Create a new draft for the mission spec."
         if not current_spec
-        else "Revise the existing mission_spec.md draft."
+        else "Revise the existing mission spec draft."
     )
     current_block = (
         ""
         if not current_spec
-        else f"\nExisting mission_spec.md draft:\n{current_spec}\n"
+        else f"\nExisting mission spec draft:\n{current_spec}\n"
     )
     feedback_block = (
         "\nFeedback to address:\nNone.\n"
@@ -33,7 +33,7 @@ def build_mission_spec_prompt(
     )
     return textwrap.dedent(
         f"""
-        You are preparing mission_spec.md for an autonomous coding mission.
+        You are preparing the mission spec for an autonomous coding mission.
         {mode_instructions}
 
         Original user request:
@@ -43,7 +43,11 @@ def build_mission_spec_prompt(
         {repo_context}
         {current_block}
         {feedback_block}
-        Write markdown only for mission_spec.md. Use these sections exactly:
+        Return the mission spec as markdown in your response text only.
+        Do NOT create, write, or edit any file on disk. The orchestrator
+        captures your response and persists it under the session directory.
+
+        Use these sections exactly:
         1. Mission
         2. Mission Success Criteria
         3. Required Behaviors
@@ -55,7 +59,7 @@ def build_mission_spec_prompt(
         - When the request is ambiguous, prefer the more audacious interpretation.
         - The Test Plan must directly prove or falsify the success criteria.
         - Capture the spirit of the user request, not just the narrowest wording.
-        - Do not include meta commentary, chain-of-thought, or explanations outside the markdown file.
+        - Do not include meta commentary, chain-of-thought, or explanations outside the markdown body.
         """
     ).strip()
 
@@ -93,7 +97,7 @@ def build_implementation_prompt(
     task: str,
     repo_context: str,
     mission_spec: str,
-    mission_pdf_path: Path,
+    mission_md_path: Path,
     locked_spec: LockedMissionSpec,
     review_feedback: str,
 ) -> str:
@@ -111,12 +115,10 @@ def build_implementation_prompt(
         {task}
 
         Locked mission spec:
-        - Markdown path: {mission_pdf_path.with_suffix('.md')}
-        - PDF path: {mission_pdf_path}
+        - Markdown path: {mission_md_path}
         - Mission markdown sha256: {locked_spec.markdown_sha256}
-        - Mission PDF sha256: {locked_spec.pdf_sha256}
 
-        The mission spec is locked. Do not modify mission_spec.md, mission_spec.pdf, or mission_spec.lock.json.
+        The mission spec is locked. Do not modify mission_spec.md or mission_spec.lock.json.
 
         Repo policy context:
         {repo_context}
@@ -144,7 +146,7 @@ def build_implementation_review_prompt(
     task: str,
     repo_context: str,
     mission_spec: str,
-    mission_pdf_path: Path,
+    mission_md_path: Path,
     claude_summary: str,
     locked_spec: LockedMissionSpec,
 ) -> str:
@@ -158,10 +160,8 @@ def build_implementation_review_prompt(
         {task}
 
         Locked mission spec:
-        - Markdown path: {mission_pdf_path.with_suffix('.md')}
-        - PDF path: {mission_pdf_path}
+        - Markdown path: {mission_md_path}
         - Mission markdown sha256: {locked_spec.markdown_sha256}
-        - Mission PDF sha256: {locked_spec.pdf_sha256}
 
         Repo policy context:
         {repo_context}

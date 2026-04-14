@@ -12,7 +12,6 @@ import time
 
 import pytest
 
-import audax_core.artifacts as artifacts_module
 from audax_core import (
     ApprovalDecision,
     HeartbeatProgress,
@@ -23,10 +22,21 @@ from audax_core import (
     lock_mission_spec,
 )
 from audax_core.approval import interactive_mission_approval
-from audax_core.artifacts import write_simple_pdf
 from audax_core.backends import ClaudeCLI, parse_claude_stream_output
-from audax_core.app import build_startup_card_info_lines, main, parse_args, read_task
-from audax_core.models import DEFAULT_WORKSPACE_DIR, session_id_from_timestamp
+from audax_core.app import (
+    build_startup_card_info_lines,
+    continue_main,
+    main,
+    parse_args,
+    parse_continue_args,
+    read_task,
+)
+from audax_core.models import (
+    DEFAULT_WORKSPACE_DIR,
+    find_resumable_sessions,
+    load_session_manifest,
+    session_id_from_timestamp,
+)
 from audax_core.progress import QuietProcessRunner
 from audax_core.repo_rules import build_repo_context, discover_rule_files
 from audax_core.ui import render_session_header_card, render_startup_card
@@ -188,7 +198,6 @@ def test_full_run_retries_until_success_and_locks_spec(tmp_path: Path) -> None:
     assert result.implementation_rounds == 2
     assert artifacts.session_dir.parent == artifacts.workspace_dir / "sessions"
     assert artifacts.mission_spec_md.exists()
-    assert artifacts.mission_spec_pdf.exists()
     assert artifacts.mission_spec_lock.exists()
     assert artifacts.session_manifest_path.exists()
     assert artifacts.event_log_path.exists()
@@ -200,8 +209,6 @@ def test_full_run_retries_until_success_and_locks_spec(tmp_path: Path) -> None:
     assert manifest["session_id"] == artifacts.session_id
     assert manifest["task"] == "Build feature X"
     assert manifest["markdown_sha256"]
-    assert manifest["pdf_sha256"]
-    assert artifacts.mission_spec_pdf.read_bytes().startswith(b"%PDF-1.4")
 
     prompt_files = sorted(artifacts.prompts_dir.iterdir())
     claude_output_files = sorted(artifacts.logs_dir.iterdir())
@@ -572,6 +579,166 @@ def test_failed_implementation_run_report_keeps_completed_round_count(tmp_path: 
     assert report["error"] == "Implementation failed to converge within 4 round(s)"
 
 
+def _seed_interrupted_session(repo_root: Path) -> MissionArtifacts:
+    """Run a full mission that fails implementation and return the artifacts."""
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    claude = FakeClaude(
+        [
+            "# Mission\nShip feature R\n\n## Mission Success Criteria\n- Observable\n\n"
+            "## Required Behaviors\n- Does thing\n\n## Test Plan\n- pytest\n\n"
+            "## Constraints And Non-Goals\n- None\n",
+            "## Accomplished\n- Partial\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- Open\n",
+            "## Accomplished\n- Still partial\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- Open\n",
+            "## Accomplished\n- Still partial\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- Open\n",
+            "## Accomplished\n- Still partial\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- Open\n",
+        ]
+    )
+    incomplete_review = {
+        "mission_accomplished": False,
+        "has_issues": True,
+        "summary": "Not done.",
+        "issues": [
+            {
+                "severity": "medium",
+                "category": "bug",
+                "title": "Open",
+                "details": "Finish it.",
+                "suggested_fix": "Finish.",
+            }
+        ],
+    }
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            incomplete_review,
+            incomplete_review,
+            incomplete_review,
+            incomplete_review,
+        ]
+    )
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=io.StringIO(),
+    )
+    with pytest.raises(RuntimeError):
+        orchestrator.run("Ship feature R")
+    return artifacts
+
+
+def test_resume_continues_failed_session_against_locked_spec(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    seeded = _seed_interrupted_session(repo_root)
+    workspace_dir = repo_root / DEFAULT_WORKSPACE_DIR
+
+    resumable = find_resumable_sessions(workspace_dir)
+    assert [entry[0] for entry in resumable] == [seeded.session_id]
+
+    manifest = load_session_manifest(workspace_dir, seeded.session_id)
+    assert manifest["status"] == "failed"
+    assert manifest["task"] == "Ship feature R"
+
+    artifacts = MissionArtifacts.from_workspace(
+        workspace_dir,
+        session_id=seeded.session_id,
+        started_at=manifest["started_at"],
+    )
+    assert artifacts.session_dir == seeded.session_dir
+
+    import audax_core.app as app_module
+
+    locked_spec = app_module._load_locked_spec(artifacts)
+
+    resume_claude = FakeClaude(
+        [
+            "## Accomplished\n- Finished feature R\n\n## Tests Run\n- pytest -q\n\n## Remaining Risks\n- None\n",
+        ]
+    )
+    resume_codex = FakeCodex(
+        [
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Mission complete after resume.",
+                "issues": [],
+            }
+        ]
+    )
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=resume_claude,
+        codex=resume_codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=io.StringIO(),
+    )
+
+    result = orchestrator.resume("Ship feature R", locked_spec)
+
+    assert result.success is True
+    assert result.session_id == seeded.session_id
+    # Drafting is skipped on resume, so Claude was only called for implementation.
+    assert len(resume_claude.calls) == 1
+    assert "Locked mission spec" in resume_claude.calls[0][1]
+
+    manifest_after = load_session_manifest(workspace_dir, seeded.session_id)
+    assert manifest_after["status"] == "succeeded"
+
+    events = [
+        json.loads(line)
+        for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(event["type"] == "session_resumed" for event in events)
+
+    # Succeeded sessions are no longer offered as resumable candidates.
+    assert find_resumable_sessions(workspace_dir) == []
+
+
+def test_resume_rejects_session_with_mutated_mission_spec(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    seeded = _seed_interrupted_session(repo_root)
+    seeded.mission_spec_md.write_text("tampered contents\n", encoding="utf-8")
+
+    artifacts = MissionArtifacts.from_workspace(
+        repo_root / DEFAULT_WORKSPACE_DIR,
+        session_id=seeded.session_id,
+        started_at=seeded.started_at,
+    )
+
+    import audax_core.app as app_module
+
+    with pytest.raises(RuntimeError, match="Mission spec lock mismatch"):
+        app_module._load_locked_spec(artifacts)
+
+
+def test_parse_continue_args_defaults() -> None:
+    args = parse_continue_args([])
+    assert args.session_id is None
+    assert args.implementation_rounds == 5
+    assert args.workspace_dir == DEFAULT_WORKSPACE_DIR
+
+
+def test_parse_continue_args_accepts_session_id() -> None:
+    args = parse_continue_args(["20260413T181500Z_pid42"])
+    assert args.session_id == "20260413T181500Z_pid42"
+
+
+def test_continue_main_errors_when_no_resumable_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    exit_code = continue_main([])
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "No resumable sessions found" in captured.err
+
+
 def test_heartbeat_progress_reports_without_streaming_payload() -> None:
     class FakeClock:
         def __init__(self) -> None:
@@ -908,47 +1075,6 @@ def test_claude_cli_sends_prompt_via_stdin_instead_of_argv(tmp_path: Path) -> No
         "--verbose",
         "--include-partial-messages",
     ]
-
-
-def test_write_simple_pdf_preserves_unicode_source_text(tmp_path: Path) -> None:
-    pypdf = pytest.importorskip("pypdf")
-    pdf_path = tmp_path / "mission_spec.pdf"
-
-    write_simple_pdf(
-        pdf_path,
-        title="Audax Mission Spec",
-        text="emoji: 😀\nworld: 世界\ncheck: ✓",
-    )
-
-    assert pdf_path.read_bytes().startswith(b"%PDF")
-    metadata = pypdf.PdfReader(str(pdf_path)).metadata
-    assert metadata["/AudaxSourceText"] == "emoji: 😀\nworld: 世界\ncheck: ✓"
-
-
-def test_write_simple_pdf_falls_back_without_optional_unicode_dependencies(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pdf_path = tmp_path / "mission_spec.pdf"
-
-    monkeypatch.setattr(artifacts_module, "Image", None)
-    monkeypatch.setattr(artifacts_module, "ImageDraw", None)
-    monkeypatch.setattr(artifacts_module, "ImageFont", None)
-    monkeypatch.setattr(artifacts_module, "FontToolsTTFont", None)
-    monkeypatch.setattr(artifacts_module, "PdfReader", None)
-    monkeypatch.setattr(artifacts_module, "PdfWriter", None)
-
-    write_simple_pdf(
-        pdf_path,
-        title="Unicode 😀",
-        text="emoji: 😀\nworld: 世界\ncheck: ✓",
-    )
-
-    pdf_bytes = pdf_path.read_bytes()
-    assert pdf_bytes.startswith(b"%PDF-1.4")
-    assert b"U0001F600" in pdf_bytes
-    assert b"u4E16" in pdf_bytes
-    assert b"u2713" in pdf_bytes
 
 
 def test_orchestrator_uses_current_stdout_by_default(tmp_path: Path) -> None:

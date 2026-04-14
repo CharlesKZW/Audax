@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import json
 from pathlib import Path
 import signal
 import shutil
 import sys
 
+from .artifacts import assert_mission_spec_locked
 from .backends import (
     CLAUDE_INCLUDE_PARTIAL_MESSAGES,
     CLAUDE_INPUT_FORMAT,
@@ -31,8 +33,11 @@ from .models import (
     DEFAULT_SPEC_ROUNDS,
     DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_DIR,
+    LockedMissionSpec,
     LoopConfig,
     MissionArtifacts,
+    find_resumable_sessions,
+    load_session_manifest,
 )
 from .orchestrator import ReviewLoopOrchestrator
 from .progress import QuietProcessRunner
@@ -47,7 +52,7 @@ def ensure_cli_available(cmd: str) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments for the top-level ``audax.py`` launcher."""
+    """Parse command-line arguments for a fresh Audax mission."""
     parser = argparse.ArgumentParser(description="Audax collaborative review loop")
     parser.add_argument("task", nargs="*", help="Mission request. If omitted, stdin is used.")
     parser.add_argument("--spec-rounds", type=int, default=DEFAULT_SPEC_ROUNDS)
@@ -63,8 +68,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--subprocess-timeout-seconds",
         type=float,
-        default=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
-        help="Kill agent CLI subprocesses after this many seconds. Use 0 to disable.",
+        default=None,
+        help=(
+            "Kill agent CLI subprocesses after this many seconds. "
+            "Unset by default (no timeout). Use 0 to explicitly disable."
+        ),
+    )
+    parser.add_argument("--claude-cmd", default=CLAUDE_CMD)
+    parser.add_argument("--codex-cmd", default=CODEX_CMD)
+    return parser.parse_args(argv)
+
+
+def parse_continue_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the ``audax continue`` subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="audax continue",
+        description=(
+            "Resume an interrupted Audax session against its already-locked "
+            "mission spec. With no session id, resumes the most recent "
+            "incomplete session in the workspace."
+        ),
+    )
+    parser.add_argument(
+        "session_id",
+        nargs="?",
+        default=None,
+        help=(
+            "Session directory name under ``audax_artifacts/sessions/`` "
+            "(e.g. 20260413T181500Z_pid42). Defaults to the most recent "
+            "incomplete session."
+        ),
+    )
+    parser.add_argument("--implementation-rounds", type=int, default=DEFAULT_IMPLEMENTATION_ROUNDS)
+    parser.add_argument("--workspace-dir", default=DEFAULT_WORKSPACE_DIR)
+    parser.add_argument("--heartbeat-seconds", type=float, default=DEFAULT_HEARTBEAT_SECONDS)
+    parser.add_argument(
+        "--subprocess-timeout-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Kill agent CLI subprocesses after this many seconds. "
+            "Unset by default (no timeout). Use 0 to explicitly disable."
+        ),
     )
     parser.add_argument("--claude-cmd", default=CLAUDE_CMD)
     parser.add_argument("--codex-cmd", default=CODEX_CMD)
@@ -196,7 +241,15 @@ def forward_termination_signals() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the Audax CLI and return a process exit status."""
+    """Run the Audax CLI and dispatch subcommands."""
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "continue":
+        return continue_main(raw[1:])
+    return run_main(raw)
+
+
+def run_main(argv: list[str]) -> int:
+    """Launch a fresh Audax mission."""
     args = parse_args(argv)
     try:
         with forward_termination_signals():
@@ -207,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.spec_rounds <= 0 or args.implementation_rounds <= 0:
                 print("Round counts must be positive integers.", file=sys.stderr)
                 return 1
-            if args.subprocess_timeout_seconds < 0:
+            if args.subprocess_timeout_seconds is not None and args.subprocess_timeout_seconds < 0:
                 print("Subprocess timeout must be zero or a positive number.", file=sys.stderr)
                 return 1
 
@@ -231,20 +284,15 @@ def main(argv: list[str] | None = None) -> int:
                 codex_cmd=args.codex_cmd,
             )
             artifacts = MissionArtifacts.from_workspace(workspace_dir)
-            process_runner = QuietProcessRunner(
-                heartbeat_seconds=args.heartbeat_seconds,
-                subprocess_timeout_seconds=config.subprocess_timeout_seconds,
-            )
-            orchestrator = ReviewLoopOrchestrator(
+            orchestrator = _build_orchestrator(
                 config=config,
                 artifacts=artifacts,
-                claude=ClaudeCLI(args.claude_cmd, process_runner, repo_root),
-                codex=CodexCLI(args.codex_cmd, process_runner, repo_root),
+                repo_root=repo_root,
             )
             result = orchestrator.run(task)
             print(
                 f"\nMission complete. Session: {result.session_dir}\n"
-                f"Locked spec: {result.mission_spec_pdf}\n"
+                f"Locked spec: {result.mission_spec_md}\n"
                 f"Run report: {result.report_path}"
             )
             return 0
@@ -254,3 +302,122 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+
+def continue_main(argv: list[str]) -> int:
+    """Resume an existing Audax session against its locked mission spec."""
+    args = parse_continue_args(argv)
+    try:
+        with forward_termination_signals():
+            if args.implementation_rounds <= 0:
+                print("Round counts must be positive integers.", file=sys.stderr)
+                return 1
+            if args.subprocess_timeout_seconds is not None and args.subprocess_timeout_seconds < 0:
+                print("Subprocess timeout must be zero or a positive number.", file=sys.stderr)
+                return 1
+
+            repo_root = Path.cwd()
+            workspace_dir = resolve_workspace_dir(repo_root, args.workspace_dir)
+
+            session_id = args.session_id or _pick_latest_resumable_session_id(workspace_dir)
+            manifest = load_session_manifest(workspace_dir, session_id)
+            task = str(manifest.get("task", "")).strip()
+            if not task:
+                print(
+                    f"Session {session_id} has no task recorded in session_manifest.json.",
+                    file=sys.stderr,
+                )
+                return 1
+            if manifest.get("status") == "succeeded":
+                print(
+                    f"Session {session_id} already succeeded; nothing to resume.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            ensure_cli_available(args.claude_cmd)
+            ensure_cli_available(args.codex_cmd)
+
+            artifacts = MissionArtifacts.from_workspace(
+                workspace_dir,
+                session_id=session_id,
+                started_at=str(manifest.get("started_at", "")) or None,
+            )
+            if not artifacts.mission_spec_lock.exists():
+                print(
+                    f"Session {session_id} has no locked mission spec; cannot resume.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            locked_spec = _load_locked_spec(artifacts)
+
+            config = LoopConfig(
+                repo_root=repo_root,
+                workspace_dir=workspace_dir,
+                max_spec_rounds=1,
+                max_implementation_rounds=args.implementation_rounds,
+                require_mission_approval=False,
+                heartbeat_seconds=args.heartbeat_seconds,
+                subprocess_timeout_seconds=(
+                    None if args.subprocess_timeout_seconds == 0 else args.subprocess_timeout_seconds
+                ),
+                claude_cmd=args.claude_cmd,
+                codex_cmd=args.codex_cmd,
+            )
+            orchestrator = _build_orchestrator(
+                config=config,
+                artifacts=artifacts,
+                repo_root=repo_root,
+            )
+            print(f"Resuming session {session_id} with task: {task}")
+            result = orchestrator.resume(task, locked_spec)
+            print(
+                f"\nResume complete. Session: {result.session_dir}\n"
+                f"Locked spec: {result.mission_spec_md}\n"
+                f"Run report: {result.report_path}"
+            )
+            return 0 if result.success else 1
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _build_orchestrator(
+    *,
+    config: LoopConfig,
+    artifacts: MissionArtifacts,
+    repo_root: Path,
+) -> ReviewLoopOrchestrator:
+    process_runner = QuietProcessRunner(
+        heartbeat_seconds=config.heartbeat_seconds,
+        subprocess_timeout_seconds=config.subprocess_timeout_seconds,
+    )
+    return ReviewLoopOrchestrator(
+        config=config,
+        artifacts=artifacts,
+        claude=ClaudeCLI(config.claude_cmd, process_runner, repo_root),
+        codex=CodexCLI(config.codex_cmd, process_runner, repo_root),
+    )
+
+
+def _pick_latest_resumable_session_id(workspace_dir: Path) -> str:
+    candidates = find_resumable_sessions(workspace_dir)
+    if not candidates:
+        raise RuntimeError(
+            f"No resumable sessions found under {workspace_dir / 'sessions'}"
+        )
+    return candidates[0][0]
+
+
+def _load_locked_spec(artifacts: MissionArtifacts) -> LockedMissionSpec:
+    assert_mission_spec_locked(artifacts)
+    manifest = json.loads(artifacts.mission_spec_lock.read_text(encoding="utf-8"))
+    markdown_text = artifacts.mission_spec_md.read_text(encoding="utf-8")
+    return LockedMissionSpec(
+        markdown_text=markdown_text,
+        markdown_sha256=str(manifest["markdown_sha256"]),
+    )

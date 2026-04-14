@@ -13,7 +13,7 @@ from typing import Any, Protocol
 DEFAULT_SPEC_ROUNDS = 3
 DEFAULT_IMPLEMENTATION_ROUNDS = 5
 DEFAULT_HEARTBEAT_SECONDS = 5.0
-DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 1800.0
+DEFAULT_SUBPROCESS_TIMEOUT_SECONDS: float | None = None
 DEFAULT_WORKSPACE_DIR = "audax_artifacts"
 CLAUDE_CMD = os.environ.get("CLAUDE_CMD", "claude")
 CODEX_CMD = os.environ.get("CODEX_CMD", "codex")
@@ -46,6 +46,46 @@ def session_id_from_timestamp(timestamp: str, *, pid: int | None = None) -> str:
     """Derive a path-safe session id from an ISO timestamp."""
     token = timestamp.replace("-", "").replace(":", "")
     return f"{token}_pid{pid or os.getpid()}"
+
+
+def find_resumable_sessions(
+    workspace_dir: Path,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Return resumable sessions newest first.
+
+    A session is resumable when the mission spec has already been locked
+    (``mission_spec.lock.json`` exists) and the run has not been recorded as
+    ``succeeded``. Each tuple is ``(session_id, session_dir, manifest)``.
+    """
+    sessions_dir = workspace_dir / "sessions"
+    if not sessions_dir.is_dir():
+        return []
+
+    found: list[tuple[str, Path, dict[str, Any]]] = []
+    for entry in sorted(sessions_dir.iterdir(), key=lambda p: p.name, reverse=True):
+        if not entry.is_dir():
+            continue
+        if not (entry / "mission_spec.lock.json").exists():
+            continue
+        manifest_path = entry / "session_manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("status") == "succeeded":
+            continue
+        found.append((entry.name, entry, manifest))
+    return found
+
+
+def load_session_manifest(workspace_dir: Path, session_id: str) -> dict[str, Any]:
+    """Read ``session_manifest.json`` for an existing session id."""
+    manifest_path = workspace_dir / "sessions" / session_id / "session_manifest.json"
+    if not manifest_path.exists():
+        raise RuntimeError(f"Session manifest missing: {manifest_path}")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 def allocate_session_id(
@@ -103,7 +143,6 @@ class MissionArtifacts:
     sessions_dir: Path
     session_dir: Path
     mission_spec_md: Path
-    mission_spec_pdf: Path
     mission_spec_lock: Path
     prompts_dir: Path
     logs_dir: Path
@@ -133,7 +172,6 @@ class MissionArtifacts:
             sessions_dir=sessions_dir,
             session_dir=session_dir,
             mission_spec_md=session_dir / "mission_spec.md",
-            mission_spec_pdf=session_dir / "mission_spec.pdf",
             mission_spec_lock=session_dir / "mission_spec.lock.json",
             prompts_dir=session_dir / "prompts",
             logs_dir=session_dir / "claude",
@@ -281,11 +319,10 @@ class ApprovalDecision:
 
 @dataclass
 class LockedMissionSpec:
-    """Immutable mission-spec content and its artifact digests."""
+    """Immutable mission-spec content and its markdown digest."""
 
     markdown_text: str
     markdown_sha256: str
-    pdf_sha256: str
 
 
 @dataclass
@@ -303,7 +340,6 @@ class RunSummary:
     implementation_rounds: int
     final_summary: str
     mission_spec_md: str
-    mission_spec_pdf: str
     event_log_path: str
     session_manifest_path: str
     report_path: str

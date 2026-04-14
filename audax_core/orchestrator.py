@@ -68,6 +68,33 @@ class ReviewLoopOrchestrator:
 
     def run(self, task: str) -> RunSummary:
         """Execute the full mission lifecycle and persist a run report."""
+        return self._execute_mission(
+            task,
+            prepare_locked_spec=self._prepare_and_lock_mission_spec,
+            resumed=False,
+        )
+
+    def resume(self, task: str, locked_spec: LockedMissionSpec) -> RunSummary:
+        """Re-run the implementation loop against an existing locked mission spec."""
+
+        def load_existing(_task: str) -> LockedMissionSpec:
+            assert_mission_spec_locked(self.artifacts)
+            return locked_spec
+
+        return self._execute_mission(
+            task,
+            prepare_locked_spec=load_existing,
+            resumed=True,
+        )
+
+    def _execute_mission(
+        self,
+        task: str,
+        *,
+        prepare_locked_spec: Callable[[str], LockedMissionSpec],
+        resumed: bool,
+    ) -> RunSummary:
+        """Shared lifecycle for fresh runs and resumed runs."""
         self._mission_spec_rounds_run = 0
         self._implementation_rounds_run = 0
         self._latest_mission_spec_review_approved = None
@@ -93,7 +120,7 @@ class ReviewLoopOrchestrator:
                 }
             )
             self.artifacts.append_event(
-                "session_started",
+                "session_resumed" if resumed else "session_started",
                 session_id=self.artifacts.session_id,
                 session_dir=self.artifacts.session_dir,
                 task=task,
@@ -101,31 +128,17 @@ class ReviewLoopOrchestrator:
                 workspace_dir=self.config.workspace_dir,
                 config=self._config_snapshot(),
             )
-            self._print_header(task)
-            locked_spec = self._prepare_and_lock_mission_spec(task)
+            self._print_header(task, resumed=resumed)
+            locked_spec = prepare_locked_spec(task)
             implementation_review = self._run_implementation_loop(task, locked_spec)
             final_summary = implementation_review.summary
             success = implementation_review.mission_accomplished and not implementation_review.has_issues
             ended_at = utc_timestamp()
-            return RunSummary(
-                success=success,
-                session_id=self.artifacts.session_id,
-                session_dir=str(self.artifacts.session_dir),
-                workspace_dir=str(self.artifacts.workspace_dir),
+            return self._build_run_summary(
                 task=task,
-                started_at=self.artifacts.started_at,
                 ended_at=ended_at,
-                mission_spec_rounds=self._mission_spec_rounds_run,
-                implementation_rounds=self._implementation_rounds_run,
                 final_summary=final_summary,
-                mission_spec_md=str(self.artifacts.mission_spec_md),
-                mission_spec_pdf=str(self.artifacts.mission_spec_pdf),
-                event_log_path=str(self.artifacts.event_log_path),
-                session_manifest_path=str(self.artifacts.session_manifest_path),
-                report_path=str(self.artifacts.report_path),
-                latest_mission_spec_review_approved=self._latest_mission_spec_review_approved,
-                latest_mission_spec_review_summary=self._latest_mission_spec_review_summary,
-                latest_mission_spec_review_feedback=self._latest_mission_spec_review_feedback,
+                success=success,
             )
         except KeyboardInterrupt:
             interrupted = True
@@ -137,26 +150,12 @@ class ReviewLoopOrchestrator:
         finally:
             ended_at = ended_at or utc_timestamp()
             status = "succeeded" if success else "interrupted" if interrupted else "failed"
-            report = RunSummary(
-                success=success,
-                session_id=self.artifacts.session_id,
-                session_dir=str(self.artifacts.session_dir),
-                workspace_dir=str(self.artifacts.workspace_dir),
+            report = self._build_run_summary(
                 task=task,
-                started_at=self.artifacts.started_at,
                 ended_at=ended_at,
-                mission_spec_rounds=self._mission_spec_rounds_run,
-                implementation_rounds=self._implementation_rounds_run,
                 final_summary=final_summary,
-                mission_spec_md=str(self.artifacts.mission_spec_md),
-                mission_spec_pdf=str(self.artifacts.mission_spec_pdf),
-                event_log_path=str(self.artifacts.event_log_path),
-                session_manifest_path=str(self.artifacts.session_manifest_path),
-                report_path=str(self.artifacts.report_path),
+                success=success,
                 error=error,
-                latest_mission_spec_review_approved=self._latest_mission_spec_review_approved,
-                latest_mission_spec_review_summary=self._latest_mission_spec_review_summary,
-                latest_mission_spec_review_feedback=self._latest_mission_spec_review_feedback,
             )
             self.artifacts.write_json(self.artifacts.report_path, asdict(report))
             self._write_session_manifest(
@@ -187,6 +186,36 @@ class ReviewLoopOrchestrator:
                 error=error,
                 report_path=self.artifacts.report_path,
             )
+
+    def _build_run_summary(
+        self,
+        *,
+        task: str,
+        ended_at: str,
+        final_summary: str,
+        success: bool,
+        error: str = "",
+    ) -> RunSummary:
+        return RunSummary(
+            success=success,
+            session_id=self.artifacts.session_id,
+            session_dir=str(self.artifacts.session_dir),
+            workspace_dir=str(self.artifacts.workspace_dir),
+            task=task,
+            started_at=self.artifacts.started_at,
+            ended_at=ended_at,
+            mission_spec_rounds=self._mission_spec_rounds_run,
+            implementation_rounds=self._implementation_rounds_run,
+            final_summary=final_summary,
+            mission_spec_md=str(self.artifacts.mission_spec_md),
+            event_log_path=str(self.artifacts.event_log_path),
+            session_manifest_path=str(self.artifacts.session_manifest_path),
+            report_path=str(self.artifacts.report_path),
+            error=error,
+            latest_mission_spec_review_approved=self._latest_mission_spec_review_approved,
+            latest_mission_spec_review_summary=self._latest_mission_spec_review_summary,
+            latest_mission_spec_review_feedback=self._latest_mission_spec_review_feedback,
+        )
 
     def _prepare_and_lock_mission_spec(self, task: str) -> LockedMissionSpec:
         """Draft, review, optionally approve, and lock the mission spec."""
@@ -330,7 +359,7 @@ class ReviewLoopOrchestrator:
                 task=task,
                 repo_context=repo_context,
                 mission_spec=self.artifacts.mission_spec_md.read_text(encoding="utf-8"),
-                mission_pdf_path=self.artifacts.mission_spec_pdf,
+                mission_md_path=self.artifacts.mission_spec_md,
                 locked_spec=locked_spec,
                 review_feedback=review_feedback,
             )
@@ -369,7 +398,7 @@ class ReviewLoopOrchestrator:
                 task=task,
                 repo_context=repo_context,
                 mission_spec=self.artifacts.mission_spec_md.read_text(encoding="utf-8"),
-                mission_pdf_path=self.artifacts.mission_spec_pdf,
+                mission_md_path=self.artifacts.mission_spec_md,
                 claude_summary=claude_summary,
                 locked_spec=locked_spec,
             )
@@ -421,7 +450,7 @@ class ReviewLoopOrchestrator:
             f"{self.config.max_implementation_rounds} round(s)"
         )
 
-    def _print_header(self, task: str) -> None:
+    def _print_header(self, task: str, *, resumed: bool = False) -> None:
         """Render a short run header to the configured output stream."""
         if supports_rich_terminal(self.output_stream):
             self.output_stream.write(
@@ -432,9 +461,19 @@ class ReviewLoopOrchestrator:
                 )
             )
             self.output_stream.flush()
+            if resumed:
+                self._write_line(
+                    f"[Resume] continuing session {self.artifacts.session_id}"
+                )
             return
         self._write_line(f"{'=' * 60}")
-        self._write_line("Audax collaborative mission loop")
+        self._write_line(
+            "Audax resuming mission loop"
+            if resumed
+            else "Audax collaborative mission loop"
+        )
+        if resumed:
+            self._write_line(f"Session: {self.artifacts.session_id}")
         self._write_line(f"Task: {task}")
         self._write_line(f"Repo: {self.config.repo_root}")
         self._write_line(f"Workspace: {self.config.workspace_dir}")
@@ -461,17 +500,15 @@ class ReviewLoopOrchestrator:
         self.artifacts.append_event(
             "mission_locked",
             mission_spec_md=self.artifacts.mission_spec_md,
-            mission_spec_pdf=self.artifacts.mission_spec_pdf,
             mission_spec_lock=self.artifacts.mission_spec_lock,
             markdown_sha256=locked_spec.markdown_sha256,
-            pdf_sha256=locked_spec.pdf_sha256,
             locked_after_round_limit=locked_after_round_limit,
             latest_review_approved=self._latest_mission_spec_review_approved,
             latest_review_summary=self._latest_mission_spec_review_summary,
             latest_review_feedback=self._latest_mission_spec_review_feedback,
         )
         self._write_line(
-            f"[Mission] locked at {self.artifacts.mission_spec_pdf} "
+            f"[Mission] locked at {self.artifacts.mission_spec_md} "
             f"(sha256 {locked_spec.markdown_sha256[:12]}...)"
         )
         return locked_spec
@@ -586,7 +623,6 @@ class ReviewLoopOrchestrator:
                     "session_manifest_path": str(self.artifacts.session_manifest_path),
                     "event_log_path": str(self.artifacts.event_log_path),
                     "mission_spec_md": str(self.artifacts.mission_spec_md),
-                    "mission_spec_pdf": str(self.artifacts.mission_spec_pdf),
                     "mission_spec_lock": str(self.artifacts.mission_spec_lock),
                     "prompts_dir": str(self.artifacts.prompts_dir),
                     "claude_dir": str(self.artifacts.logs_dir),

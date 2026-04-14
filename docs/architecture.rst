@@ -80,8 +80,6 @@ Audax deliberately mixes a few file types based on how each artifact is used:
 * JSON Lines for ``events.jsonl``, because append-only chronological logs are
   easier to stream and post-process in that format than in a single large JSON
   array.
-* PDF for the locked mission snapshot, because it gives a portable immutable
-  rendering that is hard to casually edit.
 
 Package Map
 -----------
@@ -104,7 +102,7 @@ Package Map
    * - ``audax_core.progress``
      - Heartbeat-style progress reporting and subprocess lifecycle management.
    * - ``audax_core.artifacts``
-     - Mission lock creation, integrity verification, and minimal PDF output.
+     - Mission lock creation and SHA-256 integrity verification.
    * - ``audax_core.repo_rules``
      - Discovery and bounded rendering of repository policy files.
    * - ``audax_core.prompts``
@@ -123,7 +121,8 @@ The implementation relies on a few explicit invariants:
 
 Immutable mission artifacts
    After approval, the mission spec becomes a locked contract. The orchestrator
-   verifies both the markdown and PDF digests around each implementation round.
+   verifies the SHA-256 digest of the locked markdown around each implementation
+   round.
 
 Structured review exchange
    Codex is always asked for JSON that conforms to a schema. This makes the
@@ -135,7 +134,8 @@ Repository-root execution
 
 Bounded loops
    Mission drafting and implementation each have explicit maximum round counts.
-   External subprocesses also have a timeout ceiling.
+   Individual agent subprocesses run without a timeout by default; pass
+   ``--subprocess-timeout-seconds`` to opt in to a hard ceiling.
 
 Extension Points
 ----------------

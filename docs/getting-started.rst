@@ -31,9 +31,9 @@ section before pointing it at a repository you care about.
    with uncommitted changes you cannot afford to lose.
 
    Audax does take one structural precaution: after the mission spec is
-   locked, it verifies the SHA-256 digests of the locked markdown and PDF
-   around each implementation round and fails the run if the contract has
-   been mutated.
+   locked, it verifies the SHA-256 digest of the locked markdown around
+   each implementation round and fails the run if the contract has been
+   mutated.
 
 .. warning::
 
@@ -104,8 +104,9 @@ Useful runtime options:
 * ``--require-approval`` keeps the default interactive approval gate enabled
   before the mission is locked.
 * ``--no-require-approval`` disables that approval gate.
-* ``--subprocess-timeout-seconds`` terminates a wedged ``claude`` or ``codex``
-  subprocess instead of waiting forever.
+* ``--subprocess-timeout-seconds`` optionally terminates a wedged ``claude``
+  or ``codex`` subprocess after the given number of seconds. Unset by
+  default.
 
 Artifact Layout
 ---------------
@@ -122,7 +123,6 @@ default layout is:
          session_manifest.json
          events.jsonl
          mission_spec.md
-         mission_spec.pdf
          mission_spec.lock.json
          run_report.json
          prompts/
@@ -148,11 +148,9 @@ default layout is:
        diffable, and easy to analyze after the fact with standard tools.
    * - ``mission_spec.md``
      - Locked mission source used by implementation and review prompts.
-   * - ``mission_spec.pdf``
-     - Human-readable immutable snapshot of the mission spec.
    * - ``mission_spec.lock.json``
-     - Checksum manifest used to detect unauthorized changes to locked mission
-       artifacts.
+     - SHA-256 checksum manifest used to detect unauthorized changes to the
+       locked mission markdown.
    * - ``prompts/``
      - Timestamped prompts sent to Claude and Codex for every mission and
        review round.

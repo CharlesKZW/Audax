@@ -13,7 +13,7 @@ phases:
      -> Claude drafts mission_spec.md
      -> Codex reviews the draft against the task and repo rules
      -> human approval by default
-     -> mission spec is locked as markdown + PDF + checksum manifest
+     -> mission spec is locked as markdown + SHA-256 checksum manifest
      -> Claude implements against the locked mission
      -> Codex reviews the live repository state
      -> repeat until success or round limit
@@ -46,19 +46,17 @@ By default, a user can:
 * request changes with explicit feedback, or
 * abort the mission entirely.
 
-Once the spec is accepted, Audax locks it by writing three artifacts:
+Once the spec is accepted, Audax locks it by writing two artifacts:
 
 * ``mission_spec.md``
-* ``mission_spec.pdf``
 * ``mission_spec.lock.json``
 
-All of those files live inside a timestamped session directory beneath the
-workspace root, so a later run never overwrites the forensic trail of an
-earlier run.
+Both files live inside a timestamped session directory beneath the workspace
+root, so a later run never overwrites the forensic trail of an earlier run.
 
-Subsequent implementation rounds verify the checksum manifest before and after
-Claude edits the repository. If any locked artifact changes unexpectedly, the
-run fails immediately.
+Subsequent implementation rounds verify the SHA-256 digest in the lock
+manifest before and after Claude edits the repository. If the locked mission
+markdown changes unexpectedly, the run fails immediately.
 
 Implementation And Review
 -------------------------
@@ -66,8 +64,8 @@ Implementation And Review
 Implementation rounds keep Claude focused on the immutable mission by passing:
 
 * the locked markdown contents,
-* the markdown and PDF paths,
-* the SHA-256 digests of both locked artifacts,
+* the markdown path,
+* the SHA-256 digest of the locked markdown,
 * repository policy context, and
 * any structured feedback from the previous Codex review.
 
@@ -108,5 +106,17 @@ Audax is designed to leave a useful trail even when a run fails:
   error, not just the successful terminal state.
 * Interrupted runs are marked as interrupted in the session metadata instead of
   being silently truncated.
-* Claude and Codex subprocesses inherit a configurable timeout so a wedged
-  external CLI does not stall the repository indefinitely.
+* Claude and Codex subprocesses run without a timeout by default; pass
+  ``--subprocess-timeout-seconds`` to opt in to a hard ceiling on wedged
+  external CLIs.
+
+Resuming After Disruption
+-------------------------
+
+A session that was killed mid-implementation is recoverable as long as its
+mission spec was already locked. Run ``python audax.py continue`` to pick up
+the most recent incomplete session, or ``python audax.py continue
+<session_id>`` to target a specific one. Resume skips drafting and approval
+entirely: the existing ``mission_spec.md`` and ``mission_spec.lock.json`` are
+rehydrated, the SHA-256 digest is re-verified, and the implementation loop
+restarts. See :doc:`cli-reference` for all resume flags.

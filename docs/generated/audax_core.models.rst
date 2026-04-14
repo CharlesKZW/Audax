@@ -9,6 +9,8 @@
    .. autosummary::
    
       allocate_session_id
+      find_resumable_sessions
+      load_session_manifest
       session_id_from_timestamp
       utc_timestamp
       utc_timestamp_token
