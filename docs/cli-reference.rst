@@ -24,8 +24,9 @@ Arguments And Options
    Default: ``50``.
 
 ``--workspace-dir``
-   Output directory for generated mission artifacts, logs, reviews, and the run
-   report. Default: ``.audax`` relative to the repository root.
+   Output directory for generated mission artifacts. Audax writes timestamped
+   per-run session directories underneath this root. Default:
+   ``audax_artifacts`` relative to the repository root.
 
 ``--require-approval``
    Require an interactive approval decision before the mission spec is locked.
@@ -62,7 +63,7 @@ Run with tighter review bounds and a custom workspace:
    python audax.py \
      --spec-rounds 6 \
      --implementation-rounds 20 \
-     --workspace-dir .audax-auth \
+     --workspace-dir audax_auth_artifacts \
      "Harden the authentication stack and add integration coverage"
 
 Run with interactive approval enabled:
@@ -95,3 +96,6 @@ Exit Codes
    Audax rejected invalid CLI arguments, could not find a required external
    command, or encountered a runtime failure while drafting, locking, or
    reviewing the mission.
+
+``130``
+   Audax was interrupted, typically by ``Ctrl-C``.

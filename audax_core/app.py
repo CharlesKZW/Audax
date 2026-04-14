@@ -133,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             result = orchestrator.run(task)
             print(
-                f"\nMission complete. Locked spec: {result.mission_spec_pdf}\n"
+                f"\nMission complete. Session: {result.session_dir}\n"
+                f"Locked spec: {result.mission_spec_pdf}\n"
                 f"Run report: {result.report_path}"
             )
             return 0

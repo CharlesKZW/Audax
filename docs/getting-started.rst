@@ -41,8 +41,8 @@ Useful runtime options:
   ``mission_spec.md``.
 * ``--implementation-rounds`` bounds the implementation-review loop after the
   mission is locked.
-* ``--workspace-dir`` moves generated artifacts out of the default ``.audax``
-  directory.
+* ``--workspace-dir`` moves generated artifacts out of the default
+  ``audax_artifacts`` directory.
 * ``--require-approval`` inserts an interactive approval gate before the
   mission is locked.
 * ``--subprocess-timeout-seconds`` terminates a wedged ``claude`` or ``codex``
@@ -51,7 +51,24 @@ Useful runtime options:
 Artifact Layout
 ---------------
 
-Each run writes its state beneath the configured workspace directory:
+Each run writes its state beneath the configured workspace directory. The
+default layout is:
+
+.. code-block:: text
+
+   audax_artifacts/
+     latest.json
+     sessions/
+       20260413T181500Z_pid42/
+         session_manifest.json
+         events.jsonl
+         mission_spec.md
+         mission_spec.pdf
+         mission_spec.lock.json
+         run_report.json
+         prompts/
+         claude/
+         codex/
 
 .. list-table::
    :header-rows: 1
@@ -59,6 +76,17 @@ Each run writes its state beneath the configured workspace directory:
 
    * - Path
      - Purpose
+   * - ``latest.json``
+     - Pointer to the most recent session, useful when browsing many runs.
+   * - ``sessions/<timestamp>_pid<id>/``
+     - Timestamped session root for one Audax invocation. This makes session
+       history durable and keeps each run self-contained.
+   * - ``session_manifest.json``
+     - Structured metadata for the run, including configuration, status,
+       artifact inventory, and start/end timestamps.
+   * - ``events.jsonl``
+     - Append-only event log. JSON Lines is used here because it is stable,
+       diffable, and easy to analyze after the fact with standard tools.
    * - ``mission_spec.md``
      - Locked mission source used by implementation and review prompts.
    * - ``mission_spec.pdf``
@@ -66,14 +94,17 @@ Each run writes its state beneath the configured workspace directory:
    * - ``mission_spec.lock.json``
      - Checksum manifest used to detect unauthorized changes to locked mission
        artifacts.
-   * - ``logs/``
-     - Claude-produced per-round summaries for both mission drafting and
-       implementation rounds.
-   * - ``reviews/``
-     - Codex-produced per-round structured review JSON payloads.
+   * - ``prompts/``
+     - Timestamped prompts sent to Claude and Codex for every mission and
+       review round.
+   * - ``claude/``
+     - Timestamped Claude outputs for mission drafting and implementation
+       rounds, stored as markdown or plain text.
+   * - ``codex/``
+     - Timestamped Codex structured review payloads, stored as JSON.
    * - ``run_report.json``
-     - Final success or failure summary, including round counts and any error
-       message.
+     - Final success or failure summary, including timestamps, round counts,
+       and any error message.
 
 Tests
 -----

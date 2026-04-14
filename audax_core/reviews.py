@@ -137,3 +137,20 @@ def render_review_feedback(issues: list[ReviewIssue], *, summary: str) -> str:
             lines.append(f"Suggested fix: {issue.suggested_fix}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def combine_spec_feedback(*, user_feedback: str, codex_feedback: str) -> str:
+    """Compose user-approval and Codex review feedback for the next spec round.
+
+    User feedback must persist across Codex rejection rounds until the user re-approves,
+    so both sources are labelled and concatenated rather than overwritten.
+    """
+    parts: list[str] = []
+    if user_feedback.strip():
+        parts.append(
+            "User-requested changes (preserve across rounds until satisfied):\n"
+            f"{user_feedback.strip()}"
+        )
+    if codex_feedback.strip():
+        parts.append(f"Reviewer feedback:\n{codex_feedback.strip()}")
+    return "\n\n".join(parts)

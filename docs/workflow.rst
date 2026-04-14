@@ -50,6 +50,10 @@ Once the spec is accepted, Audax locks it by writing three artifacts:
 * ``mission_spec.pdf``
 * ``mission_spec.lock.json``
 
+All of those files live inside a timestamped session directory beneath the
+workspace root, so a later run never overwrites the forensic trail of an
+earlier run.
+
 Subsequent implementation rounds verify the checksum manifest before and after
 Claude edits the repository. If any locked artifact changes unexpectedly, the
 run fails immediately.
@@ -76,15 +80,31 @@ with:
 The loop only succeeds when the mission is fully accomplished and no issues
 remain.
 
+Session Forensics
+-----------------
+
+Audax keeps every session self-contained for ex post analysis:
+
+* Exact prompts sent to Claude and Codex are preserved under ``prompts/``.
+* Claude outputs are preserved under ``claude/``.
+* Codex structured reviews are preserved under ``codex/``.
+* ``events.jsonl`` records the session chronology as append-only JSON Lines,
+  which makes it straightforward to grep, diff, stream, or post-process with
+  tools like ``jq``.
+* ``session_manifest.json`` captures stable session metadata and the artifact
+  inventory in a single structured document.
+
 Failure Semantics
 -----------------
 
 Audax is designed to leave a useful trail even when a run fails:
 
 * Mission-spec failures still write the partial draft and the run report.
-* Implementation failures still preserve per-round Claude logs and Codex
-  reviews.
+* Implementation failures still preserve per-round prompts, Claude outputs, and
+  Codex reviews.
 * ``run_report.json`` records the actual number of rounds completed before the
   error, not just the successful terminal state.
+* Interrupted runs are marked as interrupted in the session metadata instead of
+  being silently truncated.
 * Claude and Codex subprocesses inherit a configurable timeout so a wedged
   external CLI does not stall the repository indefinitely.

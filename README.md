@@ -27,7 +27,7 @@ Useful flags:
 - `--spec-rounds 10`
 - `--implementation-rounds 50`
 - `--require-approval`
-- `--workspace-dir .audax`
+- `--workspace-dir audax_artifacts`
 - `--heartbeat-seconds 5`
 - `--subprocess-timeout-seconds 1800` (use `0` to disable)
 
@@ -36,14 +36,24 @@ Useful flags:
 - Claude drafts `mission_spec.md`
 - Codex reviews the draft against the request and repo rules
 - Optional user approval happens before the mission is locked
-- The mission is locked as `.audax/mission_spec.md`, `.audax/mission_spec.pdf`, and `.audax/mission_spec.lock.json`
+- Each run creates a timestamped session directory under `audax_artifacts/sessions/`
+- The mission is locked as `mission_spec.md`, `mission_spec.pdf`, and `mission_spec.lock.json` inside that session
 - Claude implements against the locked mission
 - Codex reviews for bugs, missing requirements, repo-policy gaps, and test gaps
 - The loop repeats until success or the implementation round limit is hit
 - Each Claude/Codex subprocess is timed out after 1800 seconds by default to avoid hung runs
 - Raw partial agent output is not streamed; heartbeat lines show activity instead
 
-Per-round Claude outputs and Codex reviews are saved under `.audax/logs/` and `.audax/reviews/`. A final run report is written to `.audax/run_report.json`.
+For ex post analysis, each session keeps:
+
+- `prompts/`: timestamped prompts sent to Claude and Codex for every round
+- `claude/`: timestamped Claude outputs for mission drafting and implementation rounds
+- `codex/`: timestamped Codex JSON reviews for each round
+- `events.jsonl`: append-only structured event log with timestamps
+- `session_manifest.json`: structured session metadata and artifact inventory
+- `run_report.json`: final session summary
+
+The workspace root also keeps `latest.json`, which points to the most recent session.
 
 ## Tests
 

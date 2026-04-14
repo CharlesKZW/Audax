@@ -35,11 +35,11 @@ def parse_claude_stream_output(output: str) -> str:
         elif event.get("type") == "result":
             final_result = event.get("result", "") or ""
 
+    if final_result.strip():
+        return final_result.strip()
     assembled = "".join(chunks).strip()
     if assembled:
         return assembled
-    if final_result.strip():
-        return final_result.strip()
     return output.strip()
 
 
@@ -56,14 +56,15 @@ class ClaudeCLI:
         cmd = [
             self.cmd,
             "-p",
-            prompt,
+            "--input-format",
+            "text",
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
             "--verbose",
             "--include-partial-messages",
         ]
-        output = self.process_runner.run(cmd, label, cwd=self.repo_root)
+        output = self.process_runner.run(cmd, label, cwd=self.repo_root, stdin_text=prompt)
         return parse_claude_stream_output(output)
 
 

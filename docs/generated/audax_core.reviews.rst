@@ -8,6 +8,7 @@
 
    .. autosummary::
    
+      combine_spec_feedback
       implementation_review_schema
       implementation_review_to_dict
       issue_schema

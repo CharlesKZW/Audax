@@ -12,6 +12,21 @@ than a single unconstrained agent session:
 * repository-aware prompting grounded in local rule files, and
 * a durable artifact trail for auditing or debugging runs later.
 
+Artifact Format Choices
+-----------------------
+
+Audax deliberately mixes a few file types based on how each artifact is used:
+
+* Markdown for the mission spec and Claude outputs, because those artifacts are
+  primarily read and diffed by humans.
+* JSON for lock manifests, session manifests, and Codex reviews, because those
+  artifacts benefit from stable machine-readable structure.
+* JSON Lines for ``events.jsonl``, because append-only chronological logs are
+  easier to stream and post-process in that format than in a single large JSON
+  array.
+* PDF for the locked mission snapshot, because it gives a portable immutable
+  rendering that is hard to casually edit.
+
 Package Map
 -----------
 

@@ -21,12 +21,12 @@ class HeartbeatProgress:
         self,
         label: str,
         interval_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
-        stream: TextIO = sys.stdout,
+        stream: TextIO | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.label = label
         self.interval_seconds = max(0.0, interval_seconds)
-        self.stream = stream
+        self.stream = stream or sys.stdout
         self.clock = clock
         self.started_at: float | None = None
         self.last_update: float | None = None
@@ -63,11 +63,11 @@ class QuietProcessRunner:
     def __init__(
         self,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
-        progress_stream: TextIO = sys.stdout,
+        progress_stream: TextIO | None = None,
         subprocess_timeout_seconds: float | None = None,
     ) -> None:
         self.heartbeat_seconds = heartbeat_seconds
-        self.progress_stream = progress_stream
+        self.progress_stream = progress_stream or sys.stdout
         self.subprocess_timeout_seconds = (
             None
             if subprocess_timeout_seconds is None or subprocess_timeout_seconds <= 0
@@ -184,7 +184,7 @@ class QuietProcessRunner:
             if os.name != "nt":
                 os.killpg(proc.pid, signal.SIGTERM)
             else:
-                proc.terminate()
+                self._terminate_windows_process_tree(proc, force=False)
             proc.wait(timeout=1)
             return
         except (ProcessLookupError, subprocess.TimeoutExpired):
@@ -197,7 +197,30 @@ class QuietProcessRunner:
             if os.name != "nt":
                 os.killpg(proc.pid, signal.SIGKILL)
             else:
-                proc.kill()
+                self._terminate_windows_process_tree(proc, force=True)
             proc.wait(timeout=1)
         except (ProcessLookupError, subprocess.TimeoutExpired):
             pass
+
+    def _terminate_windows_process_tree(
+        self,
+        proc: subprocess.Popen[str],
+        *,
+        force: bool,
+    ) -> None:
+        """Terminate a Windows process tree via ``taskkill``."""
+        cmd = ["taskkill", "/PID", str(proc.pid), "/T"]
+        if force:
+            cmd.append("/F")
+        try:
+            subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            if force:
+                proc.kill()
+            else:
+                proc.terminate()
