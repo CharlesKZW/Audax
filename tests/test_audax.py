@@ -1827,6 +1827,43 @@ def test_render_implementation_round_report_contains_key_fragments() -> None:
     assert "Revocation tests" in rendered
 
 
+def test_render_round_report_renumbers_criteria_consistently() -> None:
+    """Mixed numbered/unnumbered criteria both end up numbered per column."""
+    review = ImplementationReview(
+        mission_accomplished=False,
+        has_issues=True,
+        summary="x",
+        issues=[],
+        completed_criteria=[
+            "1. First already numbered criterion",
+            "Second has no number",
+            "7. Seventh in original spec",
+        ],
+        remaining_criteria=[
+            "One without a number",
+            "3) parenthesised number",
+        ],
+        progress_pct=60,
+    )
+    rendered = render_implementation_round_report(
+        round_num=5,
+        implementer_backend="claude",
+        implementer_summary="## Accomplished\n- ok\n",
+        reviewer_backend="codex",
+        review=review,
+    )
+    # Completed column renumbered 1..3, no double-numbering.
+    assert "1. First already numbered criterion" in rendered
+    assert "2. Second has no number" in rendered
+    assert "3. Seventh in original spec" in rendered
+    # Remaining column continues the shared numbering at 4 and 5.
+    assert "4. One without a number" in rendered
+    assert "5. parenthesised number" in rendered
+    # Make sure we did not leave the raw original numbering in place.
+    assert "7. Seventh in original spec" not in rendered
+    assert "3) parenthesised number" not in rendered
+
+
 def test_render_round_report_handles_clean_review() -> None:
     review = ImplementationReview(
         mission_accomplished=True,

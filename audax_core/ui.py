@@ -34,6 +34,12 @@ ISSUE_DETAIL_MAX_LINES = 3
 
 _SECTION_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*$")
 _BULLET_PATTERN = re.compile(r"^\s*[-*+]\s+(.+?)\s*$")
+_LEADING_NUMBER_PATTERN = re.compile(r"^\s*\d+[.)]?\s+")
+
+
+def _strip_leading_number(item: str) -> str:
+    """Remove a leading ``N.`` / ``N)`` prefix so we can renumber cleanly."""
+    return _LEADING_NUMBER_PATTERN.sub("", item, count=1).strip()
 
 
 def supports_rich_terminal(stream: TextIO) -> bool:
@@ -448,23 +454,28 @@ def _render_two_column_lists(
     """Render completed/remaining as side-by-side bullet columns."""
     gap = 2
     half = (total_width - gap) // 2
+    right_start = len(left_items) + 1
     if half < 16:
         # Terminal too narrow for two columns; fall back to stacked lists.
         stacked: list[str] = [left_header]
-        for item in left_items:
-            stacked.extend(_wrap_bullet(item, total_width, indent="  ✓ ", cont="    "))
+        for idx, item in enumerate(left_items, start=1):
+            numbered = f"{idx}. {_strip_leading_number(item)}"
+            stacked.extend(_wrap_bullet(numbered, total_width, indent="  ✓ ", cont="    "))
         stacked.append("")
         stacked.append(right_header)
-        for item in right_items:
-            stacked.extend(_wrap_bullet(item, total_width, indent="  ✗ ", cont="    "))
+        for idx, item in enumerate(right_items, start=right_start):
+            numbered = f"{idx}. {_strip_leading_number(item)}"
+            stacked.extend(_wrap_bullet(numbered, total_width, indent="  ✗ ", cont="    "))
         return stacked
 
     left_lines: list[str] = [left_header]
-    for item in left_items:
-        left_lines.extend(_wrap_bullet(item, half, indent="  ✓ ", cont="    "))
+    for idx, item in enumerate(left_items, start=1):
+        numbered = f"{idx}. {_strip_leading_number(item)}"
+        left_lines.extend(_wrap_bullet(numbered, half, indent="  ✓ ", cont="    "))
     right_lines: list[str] = [right_header]
-    for item in right_items:
-        right_lines.extend(_wrap_bullet(item, half, indent="  ✗ ", cont="    "))
+    for idx, item in enumerate(right_items, start=right_start):
+        numbered = f"{idx}. {_strip_leading_number(item)}"
+        right_lines.extend(_wrap_bullet(numbered, half, indent="  ✗ ", cont="    "))
 
     rows = max(len(left_lines), len(right_lines))
     merged: list[str] = []
