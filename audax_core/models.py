@@ -296,6 +296,7 @@ class MissionReview:
     approved: bool
     summary: str
     issues: list[ReviewIssue]
+    high_stakes_decisions: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -50,13 +50,14 @@ def build_mission_spec_prompt(
         Use these sections exactly:
         1. Mission
         2. Mission Success Criteria
-        3. Required Behaviors
-        4. Test Plan
-        5. Constraints And Non-Goals
+        3. Test Plan
 
         Rules:
+        - Keep the draft concise and avoid duplicate or low-signal bullets.
         - Every requirement must be falsifiable and observable.
+        - Put required behaviors inside Mission Success Criteria; do not create a separate Required Behaviors section.
         - When the request is ambiguous, prefer the more audacious interpretation.
+        - Any success criterion that can be expressed as a deterministic test should be implemented as a test and reflected in the Test Plan.
         - The Test Plan must directly prove or falsify the success criteria.
         - Capture the spirit of the user request, not just the narrowest wording.
         - Do not include meta commentary, chain-of-thought, or explanations outside the markdown body.
@@ -81,10 +82,19 @@ def build_mission_review_prompt(*, task: str, repo_context: str, mission_spec: s
 
         Return JSON only.
 
+        Also return high_stakes_decisions: a short list of the specific decisions
+        worth explicit human approval because they materially affect scope,
+        user-visible behavior, destructive change risk, migration/rollback
+        posture, or other controversial tradeoffs. Return an empty list when
+        there are no such decisions.
+
         Approval standard:
         - Approve only if the spec fully captures the spirit of the user request.
         - Approve only if each success criterion is falsifiable and concrete.
+        - Approve only if Mission Success Criteria already includes the required behaviors instead of splitting them into a second section.
         - Approve only if the Test Plan can actually verify the mission.
+        - Approve only if deterministic, testable criteria are represented as tests in the Test Plan.
+        - Prefer concise drafts; reject bloated or duplicative specs.
         - When the spec is underspecified, prefer rejecting it and asking for the more audacious version.
 
         Every issue should explain what is missing or too weak and how to strengthen it.
@@ -132,6 +142,7 @@ def build_implementation_prompt(
         Instructions:
         - Implement all remaining mission requirements directly in the repository.
         - Respect repo rules such as tests, documentation, and synchronization requirements.
+        - Implement automated tests for any mission success criteria that can be proven with deterministic tests.
         - Run the relevant tests or checks when possible.
         - Version control: if the repo is a git repository, commit logical
           chunks of work as you make them with clear, descriptive commit
@@ -185,6 +196,7 @@ def build_implementation_review_prompt(
         - mission_accomplished is true only if the mission spec is fully satisfied.
         - has_issues is true if there is any bug, missing requirement, repo policy violation, or testing gap.
         - Use issue categories such as bug, missing_requirement, repo_policy, or test_gap.
+        - Missing automated tests for deterministic, testable success criteria is a test_gap.
         - If the implementation is clean but incomplete, still report issues and set mission_accomplished to false.
 
         Progress reporting (required fields):

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import re
 import shutil
 import textwrap
 from typing import TextIO
 import unicodedata
 
-from .models import ImplementationReview, LoopConfig
+from .models import ImplementationReview, LoopConfig, MissionReview
 
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 CARD_MIN_WIDTH = 84
@@ -255,6 +256,110 @@ def render_implementation_round_report(
         part.rstrip("\n")
         for part in (implementer_section, reviewer_section, progress_section)
     ) + "\n"
+
+
+def render_mission_approval_card(
+    *,
+    mission_spec_path: Path,
+    mission_spec: str,
+    review: MissionReview | None = None,
+    stream: TextIO | None = None,
+) -> str:
+    """Render the mission-approval summary card shown to the user."""
+    target = stream if stream is not None else None
+    color = os.environ.get("NO_COLOR") is None
+    total_width = _card_width()
+    content_width = total_width - 4
+    del target  # stream kept for signature symmetry with other render helpers.
+
+    if review is None:
+        review = MissionReview(
+            approved=True,
+            summary="Reviewer context was not provided.",
+            issues=[],
+            high_stakes_decisions=_fallback_high_stakes_decisions(mission_spec),
+        )
+
+    if review.approved:
+        status = _style("APPROVED", GOOD_ANSI, color=color)
+    else:
+        status = _style("CHANGES REQUESTED", BAD_ANSI, color=color)
+
+    lines: list[str] = [
+        f"{_style('Mission spec:', LABEL_ANSI, color=color)} {mission_spec_path}",
+        f"{_style('Reviewer status:', LABEL_ANSI, color=color)} {status}",
+    ]
+
+    if review.summary:
+        lines.append("")
+        lines.append(_style("Reviewer Summary", LABEL_ANSI, color=color))
+        for wrapped in textwrap.wrap(review.summary, width=content_width) or [""]:
+            lines.append(wrapped)
+
+    lines.append("")
+    lines.append(_style("High-Stakes / Controversial Decisions", LABEL_ANSI, color=color))
+    if review.high_stakes_decisions:
+        for idx, decision in enumerate(review.high_stakes_decisions, start=1):
+            numbered = f"{idx}. {_strip_leading_number(decision)}"
+            lines.extend(_wrap_bullet(numbered, content_width, indent="  ", cont="     "))
+    else:
+        lines.append(
+            _style(
+                "  No high-stakes or controversial decisions were flagged.",
+                MUTED_ANSI,
+                color=color,
+            )
+        )
+
+    lines.append("")
+    lines.append(_style("Reviewer Sign-Off Blockers", LABEL_ANSI, color=color))
+    if review.issues:
+        for idx, issue in enumerate(review.issues, start=1):
+            if idx > 1:
+                lines.append("")
+            severity_style = SEVERITY_ANSI.get(issue.severity.lower(), "38;5;252")
+            severity_tag = _style(f"[{issue.severity.upper()}]", severity_style, color=color)
+            title_line = f"{idx}. {severity_tag} {issue.title}"
+            for wrapped in _wrap_with_indent(title_line, content_width, indent="   "):
+                lines.append(wrapped)
+            detail_lines = textwrap.wrap(issue.details, width=content_width - 6) if issue.details else []
+            if detail_lines:
+                for detail in detail_lines[:ISSUE_DETAIL_MAX_LINES]:
+                    lines.append(f"      {detail}")
+                if len(detail_lines) > ISSUE_DETAIL_MAX_LINES:
+                    lines.append(_style("      ...", MUTED_ANSI, color=color))
+            if issue.suggested_fix:
+                fix_label = _style("Fix:", LABEL_ANSI, color=color)
+                fix_text_lines = textwrap.wrap(issue.suggested_fix, width=content_width - 10)
+                if fix_text_lines:
+                    lines.append(f"      {fix_label} {fix_text_lines[0]}")
+                    for extra in fix_text_lines[1:]:
+                        lines.append(f"           {extra}")
+    else:
+        lines.append(
+            _style(
+                "  Reviewer has no unresolved sign-off blockers.",
+                GOOD_ANSI,
+                color=color,
+            )
+        )
+
+    lines.append("")
+    lines.append(_style("Actions", LABEL_ANSI, color=color))
+    for action in (
+        f"1. {_style('Approve', GOOD_ANSI, color=color)} to lock this mission spec.",
+        f"2. {_style('Request changes', BAD_ANSI, color=color)} to send it back with feedback.",
+        "3. Abort to stop the mission.",
+    ):
+        lines.extend(_wrap_bullet(action, content_width, indent="  ", cont="     "))
+
+    return _compose_card(
+        title="Mission Approval Request",
+        body_lines=lines,
+        total_width=total_width,
+        content_width=content_width,
+        color=color,
+    )
 
 
 def _implementer_box(
@@ -535,3 +640,41 @@ def _find_section(sections: dict[str, list[str]], name: str) -> list[str]:
         if name.lower() in key:
             return value
     return []
+
+
+def _fallback_high_stakes_decisions(mission_spec: str) -> list[str]:
+    """Best-effort extraction for approval summaries without reviewer context."""
+    sections = parse_markdown_sections(mission_spec)
+    criteria = [
+        _strip_leading_number(item)
+        for item in _find_section(sections, "Mission Success Criteria")
+    ]
+    if not criteria:
+        return []
+
+    signal_words = (
+        "api",
+        "auth",
+        "breaking",
+        "cli",
+        "contract",
+        "data",
+        "default",
+        "delete",
+        "drop",
+        "migrate",
+        "migration",
+        "permission",
+        "public",
+        "remove",
+        "rename",
+        "replace",
+        "rollback",
+        "schema",
+        "security",
+    )
+    focused = [
+        item for item in criteria
+        if any(word in item.lower() for word in signal_words)
+    ]
+    return (focused or criteria)[:5]

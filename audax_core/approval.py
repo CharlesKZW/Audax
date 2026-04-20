@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+from typing import TextIO
 
-from .models import ApprovalDecision
+from .models import ApprovalDecision, MissionReview
+from .ui import render_mission_approval_card
 
 
 def _normalize_response(response: str) -> str:
@@ -12,12 +15,24 @@ def _normalize_response(response: str) -> str:
     return " ".join(response.strip().lower().replace("-", " ").split())
 
 
-def interactive_mission_approval(mission_spec: str, mission_spec_path: Path) -> ApprovalDecision:
+def interactive_mission_approval(
+    mission_spec: str,
+    mission_spec_path: Path,
+    review: MissionReview | None = None,
+    stream: TextIO | None = None,
+) -> ApprovalDecision:
     """Collect a terminal approval decision for a drafted mission spec."""
-    print(f"\nMission spec ready for approval: {mission_spec_path}")
-    print("\n--- mission_spec.md ---")
-    print(mission_spec.rstrip())
-    print("--- end mission_spec.md ---\n")
+    target = stream or sys.stdout
+    target.write("\n")
+    target.write(
+        render_mission_approval_card(
+            mission_spec_path=mission_spec_path,
+            mission_spec=mission_spec,
+            review=review,
+            stream=target,
+        )
+    )
+    target.flush()
 
     while True:
         try:
@@ -43,7 +58,8 @@ def interactive_mission_approval(mission_spec: str, mission_spec_path: Path) -> 
             "no",
             "n",
         }:
-            print("Enter requested changes. Submit an empty line to finish.")
+            target.write("Enter requested changes. Submit an empty line to finish.\n")
+            target.flush()
             lines: list[str] = []
             while True:
                 try:
@@ -56,6 +72,8 @@ def interactive_mission_approval(mission_spec: str, mission_spec_path: Path) -> 
             feedback = "\n".join(lines).strip()
             if feedback:
                 return ApprovalDecision(approved=False, feedback=feedback)
-            print("Requested changes were empty.")
+            target.write("Requested changes were empty.\n")
+            target.flush()
             continue
-        print("Please answer: approve, request changes, or abort.")
+        target.write("Please answer: approve, request changes, or abort.\n")
+        target.flush()

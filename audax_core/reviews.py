@@ -15,12 +15,16 @@ def mission_review_schema() -> dict[str, Any]:
         "properties": {
             "approved": {"type": "boolean"},
             "summary": {"type": "string"},
+            "high_stakes_decisions": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "issues": {
                 "type": "array",
                 "items": issue_schema(include_category=False),
             },
         },
-        "required": ["approved", "summary", "issues"],
+        "required": ["approved", "summary", "high_stakes_decisions", "issues"],
         "additionalProperties": False,
     }
 
@@ -85,6 +89,11 @@ def parse_mission_review(payload: dict[str, Any]) -> MissionReview:
     return MissionReview(
         approved=bool(payload.get("approved", False)),
         summary=str(payload.get("summary", "")).strip(),
+        high_stakes_decisions=[
+            str(item).strip()
+            for item in payload.get("high_stakes_decisions", []) or []
+            if str(item).strip()
+        ],
         issues=parse_issues(payload.get("issues", []), default_category="spec_gap"),
     )
 
@@ -144,6 +153,7 @@ def mission_review_to_dict(review: MissionReview) -> dict[str, Any]:
     return {
         "approved": review.approved,
         "summary": review.summary,
+        "high_stakes_decisions": list(review.high_stakes_decisions),
         "issues": [asdict(issue) for issue in review.issues],
     }
 

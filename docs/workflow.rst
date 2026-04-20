@@ -27,9 +27,11 @@ Claude is then asked to produce a markdown file with a strict structure:
 
 * Mission
 * Mission Success Criteria
-* Required Behaviors
 * Test Plan
-* Constraints And Non-Goals
+
+Required behaviors live inside ``Mission Success Criteria`` rather than a
+separate section, and criteria that can be expressed as deterministic tests are
+expected to become tests and appear in the plan.
 
 Codex reviews that draft through a JSON schema instead of free-form prose. If
 Codex rejects the draft, Audax renders the issues into compact feedback and
@@ -42,6 +44,8 @@ Mission Approval And Locking
 
 By default, a user can:
 
+* review a compact approval card showing the high-stakes decisions plus any
+  unresolved reviewer sign-off blockers,
 * approve the draft and continue,
 * request changes with explicit feedback, or
 * abort the mission entirely.

@@ -33,6 +33,7 @@ from audax_core.app import (
 )
 from audax_core.models import (
     DEFAULT_WORKSPACE_DIR,
+    MissionReview,
     find_resumable_sessions,
     load_session_manifest,
     session_id_from_timestamp,
@@ -43,6 +44,7 @@ from audax_core.models import ImplementationReview, ReviewIssue
 from audax_core.ui import (
     parse_markdown_sections,
     render_implementation_round_report,
+    render_mission_approval_card,
     render_session_header_card,
     render_startup_card,
 )
@@ -1353,6 +1355,49 @@ def test_interactive_mission_approval_treats_no_as_request_changes(
     assert result == ApprovalDecision(approved=False, feedback="Add integration coverage.")
 
 
+def test_interactive_mission_approval_renders_summary_instead_of_raw_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(["approve"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    stream = io.StringIO()
+    mission_spec = (
+        "# Mission\nShip risky migration\n\n## Mission Success Criteria\n"
+        "- Rename the public CLI command\n- Add rollback coverage\n\n## Test Plan\n- pytest -q\n"
+    )
+    review = MissionReview(
+        approved=False,
+        summary="The draft still needs human judgement.",
+        issues=[
+            ReviewIssue(
+                severity="high",
+                title="Rollback coverage missing",
+                details="The current plan changes a public CLI without a deterministic rollback test.",
+                suggested_fix="Add the rollback test before sign-off.",
+            )
+        ],
+        high_stakes_decisions=[
+            "Rename the public CLI command used by existing operators.",
+            "Require rollback coverage before locking the mission.",
+        ],
+    )
+
+    result = interactive_mission_approval(
+        mission_spec,
+        Path("mission_spec.md"),
+        review=review,
+        stream=stream,
+    )
+
+    rendered = stream.getvalue()
+    assert result == ApprovalDecision(approved=True)
+    assert "Mission Approval Request" in rendered
+    assert "Rename the public CLI command used by existing operators." in rendered
+    assert "Rollback coverage missing" in rendered
+    assert "--- mission_spec.md ---" not in rendered
+    assert "Ship risky migration" not in rendered
+
+
 def test_parse_claude_stream_output_returns_only_text_deltas() -> None:
     output = "\n".join(
         [
@@ -1879,6 +1924,39 @@ def test_render_implementation_round_report_contains_key_fragments() -> None:
     assert "✗ Remaining (2)" in rendered
     assert "Middleware wired" in rendered
     assert "Revocation tests" in rendered
+
+
+def test_render_mission_approval_card_contains_focus_and_blockers() -> None:
+    review = MissionReview(
+        approved=False,
+        summary="This draft changes public behavior and still has one blocker.",
+        issues=[
+            ReviewIssue(
+                severity="high",
+                title="Rollback test missing",
+                details="The mission changes the public API but does not require a deterministic rollback test.",
+                suggested_fix="Add an automated rollback test to the test plan.",
+            )
+        ],
+        high_stakes_decisions=[
+            "Change the public API response format.",
+            "Require a rollback path before the mission is considered done.",
+        ],
+    )
+
+    rendered = render_mission_approval_card(
+        mission_spec_path=Path("mission_spec.md"),
+        mission_spec="# Mission\nHidden from the approval card\n",
+        review=review,
+    )
+
+    assert "Mission Approval Request" in rendered
+    assert "CHANGES REQUESTED" in rendered
+    assert "High-Stakes / Controversial Decisions" in rendered
+    assert "Change the public API response format." in rendered
+    assert "Reviewer Sign-Off Blockers" in rendered
+    assert "Rollback test missing" in rendered
+    assert "Approve" in rendered
 
 
 def test_render_round_report_renumbers_criteria_consistently() -> None:

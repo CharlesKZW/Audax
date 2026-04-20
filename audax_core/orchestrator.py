@@ -19,6 +19,7 @@ from .models import (
     LockedMissionSpec,
     LoopConfig,
     MissionArtifacts,
+    MissionReview,
     RunSummary,
     utc_timestamp,
 )
@@ -376,6 +377,7 @@ class ReviewLoopOrchestrator:
                     task=task,
                     current_spec=current_spec,
                     round_num=round_num,
+                    review=review,
                     reject_summary=review.summary,
                     reject_feedback=codex_feedback,
                 )
@@ -383,7 +385,7 @@ class ReviewLoopOrchestrator:
             codex_feedback = ""
             self._latest_mission_spec_review_feedback = ""
             if self.config.require_mission_approval:
-                decision = self.approval_gate(current_spec, self.artifacts.mission_spec_md)
+                decision = self._request_mission_approval(current_spec, review)
                 if decision.aborted:
                     raise RuntimeError("Mission approval aborted by user")
                 if not decision.approved:
@@ -725,6 +727,7 @@ class ReviewLoopOrchestrator:
         task: str,
         current_spec: str,
         round_num: int,
+        review: MissionReview,
         reject_summary: str,
         reject_feedback: str,
     ) -> LockedMissionSpec:
@@ -742,8 +745,9 @@ class ReviewLoopOrchestrator:
                 f"[Mission] spec rounds exhausted after {round_num} round(s); "
                 "shipping the latest draft for final approval"
             )
-            self._emit_latest_mission_reject_message(reject_summary, reject_feedback)
-            decision = self.approval_gate(current_spec, self.artifacts.mission_spec_md)
+            if not self._uses_interactive_approval_gate():
+                self._emit_latest_mission_reject_message(reject_summary, reject_feedback)
+            decision = self._request_mission_approval(current_spec, review)
             if decision.aborted:
                 raise RuntimeError("Mission approval aborted by user")
             if not decision.approved:
@@ -778,6 +782,25 @@ class ReviewLoopOrchestrator:
             return
         if summary.strip():
             self._write_line(f"[Mission] latest Codex reject summary: {summary.strip()}")
+
+    def _uses_interactive_approval_gate(self) -> bool:
+        """Return whether the default terminal approval UI is active."""
+        return self.approval_gate is interactive_mission_approval
+
+    def _request_mission_approval(
+        self,
+        mission_spec: str,
+        review: MissionReview | None = None,
+    ) -> ApprovalDecision:
+        """Request mission approval, enriching the default UI with reviewer context."""
+        if self._uses_interactive_approval_gate():
+            return interactive_mission_approval(
+                mission_spec,
+                self.artifacts.mission_spec_md,
+                review=review,
+                stream=self.output_stream,
+            )
+        return self.approval_gate(mission_spec, self.artifacts.mission_spec_md)
 
     def _backend_name(self, backend: Any) -> str:
         return getattr(backend, "name", backend.__class__.__name__.lower())
