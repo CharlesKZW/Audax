@@ -140,6 +140,10 @@ positional task argument and finish stdin with ``Ctrl-D``:
 What Audax Guarantees
 ---------------------
 
+* **Outcome-level mission specs.** Drafts are reviewed to keep success
+  criteria focused on user-observable behavior and major architectural
+  decisions, avoiding unnecessary exact UI strings, test identifiers, and
+  implementation details.
 * **Locked mission contract.** The spec is reviewed before implementation
   and then locked as markdown plus a SHA-256 checksum manifest. The
   orchestrator verifies the markdown digest around every implementation

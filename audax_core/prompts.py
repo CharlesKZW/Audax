@@ -54,11 +54,13 @@ def build_mission_spec_prompt(
 
         Rules:
         - Keep the draft concise and avoid duplicate or low-signal bullets.
-        - Every requirement must be falsifiable and observable.
+        - Mission Success Criteria must focus on user-observable outcomes and externally visible behavior, not low-level implementation steps.
+        - Capture key architectural decisions only when they materially affect public contracts, data flow, migrations, rollback posture, security, integrations, or other major design tradeoffs.
+        - Avoid exact UI strings, test IDs/selectors, fixture names, file paths, function/class names, and test names unless the user explicitly requested that literal contract or it is necessary to identify an existing public surface.
         - Put required behaviors inside Mission Success Criteria; do not create a separate Required Behaviors section.
         - When the request is ambiguous, prefer the more audacious interpretation.
-        - Any success criterion that can be expressed as a deterministic test should be implemented as a test and reflected in the Test Plan.
-        - The Test Plan must directly prove or falsify the success criteria.
+        - Any success criterion that is appropriate for deterministic coverage should be reflected in the Test Plan as a validation area, without prescribing exact test identifiers or implementation mechanics.
+        - The Test Plan should describe the kinds of checks needed to validate the user-observable outcomes and major architectural decisions.
         - Capture the spirit of the user request, not just the narrowest wording.
         - Do not include meta commentary, chain-of-thought, or explanations outside the markdown body.
         """
@@ -82,18 +84,21 @@ def build_mission_review_prompt(*, task: str, repo_context: str, mission_spec: s
 
         Return JSON only.
 
-        Also return high_stakes_decisions: a short list of the specific decisions
-        worth explicit human approval because they materially affect scope,
-        user-visible behavior, destructive change risk, migration/rollback
-        posture, or other controversial tradeoffs. Return an empty list when
-        there are no such decisions.
+        Also return high_stakes_decisions: a short list of the major
+        architectural or user-visible decisions worth explicit human approval
+        because they materially affect scope, public contracts, destructive
+        change risk, migration/rollback posture, security posture, integrations,
+        or other controversial tradeoffs. Do not list low-level implementation
+        details. Return an empty list when there are no such decisions.
 
         Approval standard:
         - Approve only if the spec fully captures the spirit of the user request.
-        - Approve only if each success criterion is falsifiable and concrete.
+        - Approve only if Mission Success Criteria focus on user-observable outcomes rather than internal implementation details.
+        - Approve only if key architectural decisions are captured at the major-decision level without over-prescribing mechanics.
+        - Approve only if the spec avoids unnecessary exact UI strings, test IDs/selectors, fixture names, file paths, function/class names, and test names.
         - Approve only if Mission Success Criteria already includes the required behaviors instead of splitting them into a second section.
-        - Approve only if the Test Plan can actually verify the mission.
-        - Approve only if deterministic, testable criteria are represented as tests in the Test Plan.
+        - Approve only if the Test Plan can validate the mission as a strategy while leaving exact test identifiers and implementation mechanics to the implementer.
+        - Approve only if deterministic, testable user outcomes are represented as appropriate validation areas in the Test Plan.
         - Prefer concise drafts; reject bloated or duplicative specs.
         - When the spec is underspecified, prefer rejecting it and asking for the more audacious version.
 
@@ -142,7 +147,7 @@ def build_implementation_prompt(
         Instructions:
         - Implement all remaining mission requirements directly in the repository.
         - Respect repo rules such as tests, documentation, and synchronization requirements.
-        - Implement automated tests for any mission success criteria that can be proven with deterministic tests.
+        - Implement automated tests for mission success criteria that can be covered with deterministic checks.
         - Run the relevant tests or checks when possible.
         - Version control: if the repo is a git repository, commit logical
           chunks of work as you make them with clear, descriptive commit
@@ -196,7 +201,7 @@ def build_implementation_review_prompt(
         - mission_accomplished is true only if the mission spec is fully satisfied.
         - has_issues is true if there is any bug, missing requirement, repo policy violation, or testing gap.
         - Use issue categories such as bug, missing_requirement, repo_policy, or test_gap.
-        - Missing automated tests for deterministic, testable success criteria is a test_gap.
+        - Missing automated tests for deterministic, testable mission outcomes is a test_gap.
         - If the implementation is clean but incomplete, still report issues and set mission_accomplished to false.
 
         Progress reporting (required fields):

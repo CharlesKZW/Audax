@@ -139,6 +139,12 @@ Immutable mission artifacts
    verifies the SHA-256 digest of the locked markdown around each implementation
    round.
 
+Outcome-level mission contract
+   The mission spec is reviewed for user-observable success criteria and major
+   architectural decisions, not exact UI strings, test IDs, selectors, or
+   low-level implementation mechanics unless those specifics are part of the
+   requested public contract.
+
 Structured review exchange
    Codex is always asked for JSON that conforms to a schema. This makes the
    review loop easier to parse, persist, and feed back into Claude.

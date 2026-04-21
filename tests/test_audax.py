@@ -39,6 +39,7 @@ from audax_core.models import (
     session_id_from_timestamp,
 )
 from audax_core.progress import QuietProcessRunner
+from audax_core.prompts import build_mission_review_prompt, build_mission_spec_prompt
 from audax_core.repo_rules import build_repo_context, discover_rule_files
 from audax_core.models import ImplementationReview, ReviewIssue
 from audax_core.ui import (
@@ -117,6 +118,29 @@ def make_config(repo_root: Path, *, require_approval: bool = False) -> LoopConfi
     )
 
 
+def test_mission_spec_prompts_prioritize_observable_outcomes_over_specifics() -> None:
+    draft_prompt = build_mission_spec_prompt(
+        task="Refresh the onboarding form.",
+        repo_context="No special rules.",
+        current_spec="",
+        pending_feedback="",
+    )
+    review_prompt = build_mission_review_prompt(
+        task="Refresh the onboarding form.",
+        repo_context="No special rules.",
+        mission_spec="# Mission\nShip it\n",
+    )
+
+    combined = f"{draft_prompt}\n{review_prompt}"
+
+    assert "falsifiable" not in combined.lower()
+    assert "user-observable outcomes" in combined
+    assert "key architectural decisions" in combined
+    assert "Avoid exact UI strings, test IDs/selectors" in draft_prompt
+    assert "spec avoids unnecessary exact UI strings, test IDs/selectors" in review_prompt
+    assert "without prescribing exact test identifiers" in combined
+
+
 def test_mission_artifacts_use_timestamped_session_layout(tmp_path: Path) -> None:
     artifacts = MissionArtifacts.from_workspace(
         tmp_path / DEFAULT_WORKSPACE_DIR,
@@ -186,9 +210,9 @@ def test_full_run_retries_until_success_and_locks_spec(tmp_path: Path) -> None:
                 "issues": [
                     {
                         "severity": "high",
-                        "title": "Missing falsifiable criteria",
-                        "details": "State exact observable success conditions.",
-                        "suggested_fix": "Rewrite the success criteria and test plan.",
+                        "title": "Missing observable outcomes",
+                        "details": "State the user-observable success outcomes.",
+                        "suggested_fix": "Rewrite the success criteria and test plan around observable outcomes.",
                     }
                 ],
             },

@@ -78,6 +78,13 @@ user task
   ─▶ repeat until success or round limit
 ```
 
+Mission specs are intentionally outcome-level. Success criteria should describe
+user-observable behavior, while the spec captures only major architectural
+decisions that affect public contracts, data flow, migrations, rollback,
+security, or integrations. It should avoid low-level mechanics, exact UI copy,
+test IDs/selectors, fixture names, file paths, function names, and test names
+unless those literals are part of the requested public contract.
+
 Each run creates a timestamped session directory under
 `audax_artifacts/sessions/`. Every prompt, every Claude output, every Codex
 review, and an append-only `events.jsonl` chronology are persisted inside
@@ -200,6 +207,9 @@ from repo state.
 
 - Claude drafts `mission_spec.md`.
 - Codex reviews the draft against the request and repo rules.
+- The draft is expected to stay focused on user-observable outcomes and major
+  architectural decisions, not implementation minutiae or exact test/UI
+  identifiers.
 - User approval is **required by default** before the mission is locked.
 - If Codex still has open objections when spec rounds are exhausted, Audax
   ships the latest draft for a final human decision and shows the latest

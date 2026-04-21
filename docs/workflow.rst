@@ -30,8 +30,16 @@ Claude is then asked to produce a markdown file with a strict structure:
 * Test Plan
 
 Required behaviors live inside ``Mission Success Criteria`` rather than a
-separate section, and criteria that can be expressed as deterministic tests are
-expected to become tests and appear in the plan.
+separate section. Those criteria are intentionally outcome-level: they should
+describe user-observable behavior and only capture major architectural
+decisions when those decisions affect public contracts, data flow, migrations,
+rollback posture, security, integrations, or other meaningful tradeoffs.
+
+The spec should avoid low-level mechanics, exact UI strings, test
+IDs/selectors, fixture names, file paths, function names, and test names unless
+those literals are part of the user-requested public contract. The ``Test
+Plan`` describes validation areas and relevant checks, while leaving exact test
+identifiers and implementation mechanics to the implementer.
 
 Codex reviews that draft through a JSON schema instead of free-form prose. If
 Codex rejects the draft, Audax renders the issues into compact feedback and
