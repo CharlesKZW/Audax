@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import signal
 import shutil
@@ -42,7 +43,15 @@ from .models import (
 )
 from .orchestrator import ReviewLoopOrchestrator
 from .progress import QuietProcessRunner
-from .ui import read_task_interactive, render_startup_card, supports_rich_terminal
+from .ui import (
+    read_task_interactive,
+    render_startup_card,
+    style_disabled,
+    style_enabled,
+    style_section_header,
+    style_warning,
+    supports_rich_terminal,
+)
 
 
 def ensure_cli_available(cmd: str) -> None:
@@ -176,6 +185,7 @@ def build_startup_card_info_lines(
     interactive: bool = False,
 ) -> list[str]:
     """Build the rich startup-card summary shown before stdin task entry."""
+    color = os.environ.get("NO_COLOR") is None
     repo_root = repo_root or Path.cwd()
     workspace_dir = resolve_workspace_dir(
         repo_root,
@@ -186,67 +196,75 @@ def build_startup_card_info_lines(
         "subprocess_timeout_seconds",
         DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
     )
+
+    def toggle(flag: bool) -> str:
+        return style_enabled(color=color) if flag else style_disabled(color=color)
+
     submit_hint = (
-        "Press Enter to submit. Alt+Enter inserts a new line."
+        "Press **Enter** to submit · **Alt+Enter** inserts a new line."
         if interactive
-        else "Press Ctrl-D when you are done."
+        else "Press **Ctrl-D** when you are done."
     )
+
+    claude_permissions = (
+        style_warning("dangerously-skip-permissions", color=color)
+        if CLAUDE_SKIP_PERMISSIONS
+        else "CLI default"
+    )
+    codex_sandbox = (
+        style_warning("dangerously-bypass-approvals-and-sandbox", color=color)
+        if CODEX_BYPASS_APPROVALS_AND_SANDBOX
+        else "CLI default"
+    )
+
     return [
-        "Enter the mission prompt for Audax.",
+        "Enter the **mission prompt** for Audax.",
         submit_hint,
-        f"Audax will make changes in: {repo_root}",
+        f"Target repository: `{repo_root}`",
         "",
-        "Adjustable flags for this session:",
-        f"--spec-rounds: {getattr(args, 'spec_rounds', DEFAULT_SPEC_ROUNDS)}",
+        style_section_header("Session Flags", color=color),
+        f"  **--spec-rounds**: {getattr(args, 'spec_rounds', DEFAULT_SPEC_ROUNDS)}",
         (
-            "--implementation-rounds: "
+            "  **--implementation-rounds**: "
             f"{getattr(args, 'implementation_rounds', DEFAULT_IMPLEMENTATION_ROUNDS)}"
         ),
-        f"--workspace-dir: {workspace_dir}",
+        f"  **--workspace-dir**: `{workspace_dir}`",
         (
-            "--require-approval/--no-require-approval: "
-            f"{'enabled' if getattr(args, 'require_approval', True) else 'disabled'}"
+            "  **--require-approval/--no-require-approval**: "
+            f"{toggle(getattr(args, 'require_approval', True))}"
         ),
-        f"--heartbeat-seconds: {_format_seconds(getattr(args, 'heartbeat_seconds', DEFAULT_HEARTBEAT_SECONDS))}",
+        f"  **--heartbeat-seconds**: {_format_seconds(getattr(args, 'heartbeat_seconds', DEFAULT_HEARTBEAT_SECONDS))}",
         (
-            "--subprocess-timeout-seconds: "
+            "  **--subprocess-timeout-seconds**: "
             f"{_format_seconds(None if subprocess_timeout_seconds == 0 else subprocess_timeout_seconds)}"
         ),
-        f"--claude-cmd: {getattr(args, 'claude_cmd', CLAUDE_CMD)}",
-        f"--codex-cmd: {getattr(args, 'codex_cmd', CODEX_CMD)}",
+        f"  **--claude-cmd**: `{getattr(args, 'claude_cmd', CLAUDE_CMD)}`",
+        f"  **--codex-cmd**: `{getattr(args, 'codex_cmd', CODEX_CMD)}`",
         (
-            "--auto-commit/--no-auto-commit: "
-            f"{'enabled' if getattr(args, 'auto_commit', True) else 'disabled'}"
+            "  **--auto-commit/--no-auto-commit**: "
+            f"{toggle(getattr(args, 'auto_commit', True))}"
         ),
         (
-            "--session-branch/--no-session-branch: "
-            f"{'enabled' if getattr(args, 'session_branch', False) else 'disabled'}"
+            "  **--session-branch/--no-session-branch**: "
+            f"{toggle(getattr(args, 'session_branch', False))}"
         ),
         "",
-        "Claude runtime selected by Audax:",
-        f"model: {_describe_optional_setting(CLAUDE_MODEL)}",
-        f"reasoning effort: {_describe_optional_setting(CLAUDE_REASONING_EFFORT)}",
+        style_section_header("Claude Runtime", color=color),
+        f"  **model**: {_describe_optional_setting(CLAUDE_MODEL)}",
+        f"  **reasoning effort**: {_describe_optional_setting(CLAUDE_REASONING_EFFORT)}",
+        f"  **permissions**: {claude_permissions}",
         (
-            "permissions: dangerously-skip-permissions"
-            if CLAUDE_SKIP_PERMISSIONS
-            else "permissions: CLI default"
-        ),
-        (
-            "I/O: "
-            f"{CLAUDE_INPUT_FORMAT} prompt -> {CLAUDE_OUTPUT_FORMAT} output"
+            "  **I/O**: "
+            f"{CLAUDE_INPUT_FORMAT} prompt → {CLAUDE_OUTPUT_FORMAT} output"
             f"{' with verbose logging' if CLAUDE_VERBOSE else ''}"
             f"{' and partial messages' if CLAUDE_INCLUDE_PARTIAL_MESSAGES else ''}"
         ),
         "",
-        "Codex runtime selected by Audax:",
-        f"model: {CODEX_MODEL}",
-        f"reasoning effort: {CODEX_REASONING_EFFORT}",
-        (
-            "approvals/sandbox: dangerously-bypass-approvals-and-sandbox"
-            if CODEX_BYPASS_APPROVALS_AND_SANDBOX
-            else "approvals/sandbox: CLI default"
-        ),
-        "output: JSON schema validated into a temporary output file",
+        style_section_header("Codex Runtime", color=color),
+        f"  **model**: {CODEX_MODEL}",
+        f"  **reasoning effort**: {CODEX_REASONING_EFFORT}",
+        f"  **approvals/sandbox**: {codex_sandbox}",
+        "  **output**: JSON schema validated into a temporary output file",
     ]
 
 

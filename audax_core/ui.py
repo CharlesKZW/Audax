@@ -95,15 +95,44 @@ def supports_rich_terminal(stream: TextIO) -> bool:
 
 def render_startup_card(stream: TextIO, info_lines: list[str] | None = None) -> str:
     """Render the interactive startup card shown before stdin mission entry."""
-    return _render_card(
-        stream=stream,
+    del stream  # kept for signature compatibility with other card helpers
+    color = os.environ.get("NO_COLOR") is None
+    total_width = _card_width()
+    content_width = total_width - 4
+    body_lines = info_lines or [
+        "Enter the **mission prompt** for Audax.",
+        "Press **Ctrl-D** when you are done.",
+        "Audax will make changes in the current working directory.",
+    ]
+    return _compose_card(
         title="AUDAX CONSOLE",
-        info_lines=info_lines or [
-            "Enter the mission prompt for Audax.",
-            "Press Ctrl-D when you are done.",
-            "Audax will make changes in the current working directory.",
-        ],
+        body_lines=body_lines,
+        total_width=total_width,
+        content_width=content_width,
+        color=color,
     )
+
+
+def style_section_header(name: str, *, color: bool) -> str:
+    """Return a bolded, decorated section header for the startup card."""
+    rule = "─" * 6
+    text = f"── {name} {rule}"
+    return _style(text, HEADING_ANSI, color=color)
+
+
+def style_enabled(label: str = "enabled", *, color: bool) -> str:
+    """Return a green-styled on-state label for flag rows."""
+    return _style(label, GOOD_ANSI, color=color)
+
+
+def style_disabled(label: str = "disabled", *, color: bool) -> str:
+    """Return a muted off-state label for flag rows."""
+    return _style(label, MUTED_ANSI, color=color)
+
+
+def style_warning(label: str, *, color: bool) -> str:
+    """Return an amber-styled label used for danger-mode runtime values."""
+    return _style(label, "1;38;5;208", color=color)
 
 
 def read_task_interactive() -> str:
@@ -256,23 +285,19 @@ def parse_markdown_sections(text: str) -> dict[str, list[str]]:
     return sections
 
 
-def render_implementation_round_report(
+def render_implementer_round_box(
     *,
     round_num: int,
     implementer_backend: str,
     implementer_summary: str,
-    reviewer_backend: str,
-    review: ImplementationReview,
     stream: TextIO | None = None,
 ) -> str:
-    """Render the three-box report shown after each implementation round."""
-    target = stream if stream is not None else None
+    """Render only the implementer box for the given round."""
+    del stream  # kept for signature symmetry with other render helpers
     color = os.environ.get("NO_COLOR") is None
     total_width = _card_width()
     content_width = total_width - 4
-    del target  # stream kept for signature compatibility; not used directly.
-
-    implementer_section = _implementer_box(
+    return _implementer_box(
         round_num=round_num,
         backend=implementer_backend,
         summary_markdown=implementer_summary,
@@ -280,6 +305,20 @@ def render_implementation_round_report(
         content_width=content_width,
         color=color,
     )
+
+
+def render_reviewer_and_progress_boxes(
+    *,
+    round_num: int,
+    reviewer_backend: str,
+    review: ImplementationReview,
+    stream: TextIO | None = None,
+) -> str:
+    """Render the reviewer box followed by the progress box for the round."""
+    del stream  # kept for signature symmetry with other render helpers
+    color = os.environ.get("NO_COLOR") is None
+    total_width = _card_width()
+    content_width = total_width - 4
     reviewer_section = _reviewer_box(
         round_num=round_num,
         backend=reviewer_backend,
@@ -296,9 +335,37 @@ def render_implementation_round_report(
         color=color,
     )
     return "\n".join(
-        part.rstrip("\n")
-        for part in (implementer_section, reviewer_section, progress_section)
+        part.rstrip("\n") for part in (reviewer_section, progress_section)
     ) + "\n"
+
+
+def render_implementation_round_report(
+    *,
+    round_num: int,
+    implementer_backend: str,
+    implementer_summary: str,
+    reviewer_backend: str,
+    review: ImplementationReview,
+    stream: TextIO | None = None,
+) -> str:
+    """Render the three-box report shown after each implementation round."""
+    implementer_section = render_implementer_round_box(
+        round_num=round_num,
+        implementer_backend=implementer_backend,
+        implementer_summary=implementer_summary,
+        stream=stream,
+    )
+    reviewer_and_progress = render_reviewer_and_progress_boxes(
+        round_num=round_num,
+        reviewer_backend=reviewer_backend,
+        review=review,
+        stream=stream,
+    )
+    return (
+        implementer_section.rstrip("\n")
+        + "\n"
+        + reviewer_and_progress
+    )
 
 
 def render_mission_approval_card(

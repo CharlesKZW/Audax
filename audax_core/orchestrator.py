@@ -42,7 +42,8 @@ from .reviews import (
     render_review_feedback,
 )
 from .ui import (
-    render_implementation_round_report,
+    render_implementer_round_box,
+    render_reviewer_and_progress_boxes,
     render_session_header_card,
     supports_rich_terminal,
 )
@@ -466,6 +467,12 @@ class ReviewLoopOrchestrator:
             )
             assert_mission_spec_locked(self.artifacts)
 
+            self._emit_implementer_report(
+                round_num=round_num,
+                implementer_backend=implementer_backend,
+                implementer_summary=implementation_summary,
+            )
+
             self._write_line(f"[Implementation {round_num}] reviewing implementation")
             implementation_review_prompt = build_implementation_review_prompt(
                 task=task,
@@ -518,10 +525,8 @@ class ReviewLoopOrchestrator:
                 progress_pct=review.progress_pct,
             )
 
-            self._emit_round_report(
+            self._emit_reviewer_report(
                 round_num=round_num,
-                implementer_backend=implementer_backend,
-                implementer_summary=implementation_summary,
                 reviewer_backend=impl_reviewer_backend,
                 review=review,
             )
@@ -669,20 +674,34 @@ class ReviewLoopOrchestrator:
                 ],
             )
 
-    def _emit_round_report(
+    def _emit_implementer_report(
         self,
         *,
         round_num: int,
         implementer_backend: str,
         implementer_summary: str,
-        reviewer_backend: str,
-        review: ImplementationReview,
     ) -> None:
-        """Print the three-box round report for the implementation/review pair."""
-        report = render_implementation_round_report(
+        """Print the implementer box as soon as the implementation is done."""
+        report = render_implementer_round_box(
             round_num=round_num,
             implementer_backend=implementer_backend,
             implementer_summary=implementer_summary,
+        )
+        self.output_stream.write("\n")
+        self.output_stream.write(report)
+        self.output_stream.write("\n")
+        self.output_stream.flush()
+
+    def _emit_reviewer_report(
+        self,
+        *,
+        round_num: int,
+        reviewer_backend: str,
+        review: ImplementationReview,
+    ) -> None:
+        """Print the reviewer and progress boxes after the review completes."""
+        report = render_reviewer_and_progress_boxes(
+            round_num=round_num,
             reviewer_backend=reviewer_backend,
             review=review,
         )

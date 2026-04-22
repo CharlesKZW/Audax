@@ -2225,6 +2225,8 @@ def test_render_session_header_card_uses_box_layout() -> None:
 
 
 def test_render_startup_card_uses_box_layout() -> None:
+    from audax_core.ui import ANSI_PATTERN
+
     class FakeTTY(io.StringIO):
         def isatty(self) -> bool:
             return True
@@ -2243,20 +2245,24 @@ def test_render_startup_card_uses_box_layout() -> None:
         FakeTTY(),
         build_startup_card_info_lines(args, repo_root=Path("/tmp/repo")),
     )
+    plain = ANSI_PATTERN.sub("", rendered)
 
-    assert "AUDAX CONSOLE" in rendered
-    assert "Enter the mission prompt for Audax." in rendered
-    assert "Audax will make changes in: /tmp/repo" in rendered
-    assert "--spec-rounds: 6" in rendered
-    assert "--subprocess-timeout-seconds: disabled" in rendered
-    assert "--require-approval/--no-require-approval: enabled" in rendered
-    assert "Claude runtime selected by Audax:" in rendered
-    assert "Codex runtime selected by Audax:" in rendered
-    assert "model: opus" in rendered
-    assert "reasoning effort: max" in rendered
-    assert "model: gpt-5.4" in rendered
-    assert "reasoning effort: xhigh" in rendered
+    assert "AUDAX CONSOLE" in plain
+    assert "Enter the mission prompt for Audax." in plain
+    assert "Target repository: /tmp/repo" in plain
+    assert "── Session Flags" in plain
+    assert "--spec-rounds: 6" in plain
+    assert "--subprocess-timeout-seconds: disabled" in plain
+    assert "--require-approval/--no-require-approval: enabled" in plain
+    assert "── Claude Runtime" in plain
+    assert "── Codex Runtime" in plain
+    assert "model: opus" in plain
+    assert "reasoning effort: max" in plain
+    assert "model: gpt-5.4" in plain
+    assert "reasoning effort: xhigh" in plain
     assert "╭" in rendered and "╰" in rendered
+    # Bold markers for flag labels get translated to ANSI bold.
+    assert "\x1b[1m--spec-rounds\x1b[22m" in rendered
 
 
 def test_build_repo_context_handles_symlinked_repo_root(tmp_path: Path) -> None:
@@ -2346,6 +2352,8 @@ def test_read_task_prompts_for_stdin(monkeypatch: pytest.MonkeyPatch, capsys: py
 
 
 def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    from audax_core.ui import ANSI_PATTERN
+
     class FakeTTY(io.StringIO):
         def isatty(self) -> bool:
             return True
@@ -2370,17 +2378,18 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     rendered = stdout.getvalue()
+    plain = ANSI_PATTERN.sub("", rendered)
     assert task == "build the thing"
-    assert "AUDAX CONSOLE" in rendered
-    assert "Enter the mission prompt for Audax." in rendered
-    assert "Press Ctrl-D when you are done." in rendered
-    assert "Audax will make changes in:" in rendered
-    assert "--implementation-rounds: 12" in rendered
-    assert "--claude-cmd: claude-enterprise" in rendered
-    assert "--require-approval/--no-require-approval: enabled" in rendered
-    assert "model: opus" in rendered
-    assert "reasoning effort: max" in rendered
-    assert "approvals/sandbox: dangerously-bypass-approvals-and-sandbox" in rendered
+    assert "AUDAX CONSOLE" in plain
+    assert "Enter the mission prompt for Audax." in plain
+    assert "Press Ctrl-D when you are done." in plain
+    assert "Target repository:" in plain
+    assert "--implementation-rounds: 12" in plain
+    assert "--claude-cmd: claude-enterprise" in plain
+    assert "--require-approval/--no-require-approval: enabled" in plain
+    assert "model: opus" in plain
+    assert "reasoning effort: max" in plain
+    assert "approvals/sandbox: dangerously-bypass-approvals-and-sandbox" in plain
     assert "╭" in rendered and "╰" in rendered
 
 
