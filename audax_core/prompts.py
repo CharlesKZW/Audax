@@ -43,7 +43,7 @@ def build_mission_spec_prompt(
         {repo_context}
         {current_block}
         {feedback_block}
-        Return the mission spec as markdown in your response text only.
+        Return a terse mission spec as markdown in your response text only.
         Do NOT create, write, or edit any file on disk. The orchestrator
         captures your response and persists it under the session directory.
 
@@ -53,14 +53,18 @@ def build_mission_spec_prompt(
         3. Test Plan
 
         Rules:
-        - Keep the draft concise and avoid duplicate or low-signal bullets.
-        - Mission Success Criteria must focus on user-observable outcomes and externally visible behavior, not low-level implementation steps.
+        - Treat the spec as a human approval artifact: every line will be read, so every line must justify its existence.
+        - Write the shortest draft that preserves high-impact requirements, critical risks, and decisions that affect approval.
+        - Omit background, rationale, restatements, nice-to-haves, obvious implementation hygiene, and low-risk edge cases.
+        - Use concise bullets; avoid paragraphs, duplicate points, and low-signal bullets.
+        - Mission should be one sentence.
+        - Mission Success Criteria must focus on critical user-observable outcomes and externally visible behavior, not low-level implementation steps.
         - Capture key architectural decisions only when they materially affect public contracts, data flow, migrations, rollback posture, security, integrations, or other major design tradeoffs.
         - Avoid exact UI strings, test IDs/selectors, fixture names, file paths, function/class names, and test names unless the user explicitly requested that literal contract or it is necessary to identify an existing public surface.
         - Put required behaviors inside Mission Success Criteria; do not create a separate Required Behaviors section.
         - When the request is ambiguous, prefer the more audacious interpretation.
-        - Any success criterion that is appropriate for deterministic coverage should be reflected in the Test Plan as a validation area, without prescribing exact test identifiers or implementation mechanics.
-        - The Test Plan should describe the kinds of checks needed to validate the user-observable outcomes and major architectural decisions.
+        - Any critical success criterion that is appropriate for deterministic coverage should be reflected in the Test Plan as a validation area, without prescribing exact test identifiers or implementation mechanics.
+        - The Test Plan should name only the checks needed to validate critical user-observable outcomes and major architectural decisions.
         - Capture the spirit of the user request, not just the narrowest wording.
         - Do not include meta commentary, chain-of-thought, or explanations outside the markdown body.
         """
@@ -93,7 +97,10 @@ def build_mission_review_prompt(*, task: str, repo_context: str, mission_spec: s
 
         Approval standard:
         - Approve only if the spec fully captures the spirit of the user request.
-        - Approve only if Mission Success Criteria focus on user-observable outcomes rather than internal implementation details.
+        - Approve only if every line has a clear approval or implementation purpose.
+        - Approve only if the spec is terse and limited to high-impact requirements, critical risks, and decisions that affect approval.
+        - Reject background, rationale, restatements, nice-to-haves, obvious implementation hygiene, low-risk edge cases, duplicate points, and other low-signal lines.
+        - Approve only if Mission Success Criteria focus on critical user-observable outcomes rather than internal implementation details.
         - Approve only if key architectural decisions are captured at the major-decision level without over-prescribing mechanics.
         - Approve only if the spec avoids unnecessary exact UI strings, test IDs/selectors, fixture names, file paths, function/class names, and test names.
         - Approve only if Mission Success Criteria already includes the required behaviors instead of splitting them into a second section.
@@ -102,7 +109,8 @@ def build_mission_review_prompt(*, task: str, repo_context: str, mission_spec: s
         - Prefer concise drafts; reject bloated or duplicative specs.
         - When the spec is underspecified, prefer rejecting it and asking for the more audacious version.
 
-        Every issue should explain what is missing or too weak and how to strengthen it.
+        Issues must describe only the problem, evidence, severity, and why it blocks approval.
+        Do not prescribe fixes or implementation strategy; the implementer owns the solution.
         """
     ).strip()
 
@@ -203,6 +211,8 @@ def build_implementation_review_prompt(
         - Use issue categories such as bug, missing_requirement, repo_policy, or test_gap.
         - Missing automated tests for deterministic, testable mission outcomes is a test_gap.
         - If the implementation is clean but incomplete, still report issues and set mission_accomplished to false.
+        - Issues must describe only the problem, evidence, severity, and why it blocks completion.
+        - Do not prescribe fixes or implementation strategy; the implementer owns the solution.
 
         Progress reporting (required fields):
         - completed_criteria: list of short human-readable descriptions of

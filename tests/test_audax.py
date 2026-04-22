@@ -33,14 +33,24 @@ from audax_core.app import (
 )
 from audax_core.models import (
     DEFAULT_WORKSPACE_DIR,
+    LockedMissionSpec,
     MissionReview,
     find_resumable_sessions,
     load_session_manifest,
     session_id_from_timestamp,
 )
 from audax_core.progress import QuietProcessRunner
-from audax_core.prompts import build_mission_review_prompt, build_mission_spec_prompt
+from audax_core.prompts import (
+    build_implementation_review_prompt,
+    build_mission_review_prompt,
+    build_mission_spec_prompt,
+)
 from audax_core.repo_rules import build_repo_context, discover_rule_files
+from audax_core.reviews import (
+    implementation_review_schema,
+    mission_review_schema,
+    render_review_feedback,
+)
 from audax_core.models import ImplementationReview, ReviewIssue
 from audax_core.ui import (
     parse_markdown_sections,
@@ -130,15 +140,54 @@ def test_mission_spec_prompts_prioritize_observable_outcomes_over_specifics() ->
         repo_context="No special rules.",
         mission_spec="# Mission\nShip it\n",
     )
+    implementation_review_prompt = build_implementation_review_prompt(
+        task="Refresh the onboarding form.",
+        repo_context="No special rules.",
+        mission_spec="# Mission\nShip it\n",
+        mission_md_path=Path("mission_spec.md"),
+        claude_summary="Done",
+        locked_spec=LockedMissionSpec(
+            markdown_text="# Mission\nShip it\n",
+            markdown_sha256="abc123",
+        ),
+    )
 
-    combined = f"{draft_prompt}\n{review_prompt}"
+    combined = f"{draft_prompt}\n{review_prompt}\n{implementation_review_prompt}"
 
     assert "falsifiable" not in combined.lower()
     assert "user-observable outcomes" in combined
     assert "key architectural decisions" in combined
+    assert "every line must justify its existence" in draft_prompt
+    assert "limited to high-impact requirements, critical risks" in review_prompt
+    assert "Reject background, rationale, restatements" in review_prompt
+    assert "Do not prescribe fixes or implementation strategy" in review_prompt
     assert "Avoid exact UI strings, test IDs/selectors" in draft_prompt
     assert "spec avoids unnecessary exact UI strings, test IDs/selectors" in review_prompt
     assert "without prescribing exact test identifiers" in combined
+
+
+def test_review_issue_schema_and_feedback_are_problem_only() -> None:
+    for schema in (mission_review_schema(), implementation_review_schema()):
+        issue_schema = schema["properties"]["issues"]["items"]
+        assert "suggested_fix" not in issue_schema["properties"]
+        assert "suggested_fix" not in issue_schema["required"]
+
+    feedback = render_review_feedback(
+        [
+            ReviewIssue(
+                severity="high",
+                category="missing_requirement",
+                title="Edit Mode toggle does not gate direct manipulation",
+                details="Transform controls remain mounted when Edit Mode is disabled.",
+            )
+        ],
+        summary="One blocker.",
+    )
+
+    assert "Edit Mode toggle does not gate direct manipulation" in feedback
+    assert "Transform controls remain mounted" in feedback
+    assert "Fix:" not in feedback
+    assert "Suggested fix" not in feedback
 
 
 def test_mission_artifacts_use_timestamped_session_layout(tmp_path: Path) -> None:
@@ -212,7 +261,6 @@ def test_full_run_retries_until_success_and_locks_spec(tmp_path: Path) -> None:
                         "severity": "high",
                         "title": "Missing observable outcomes",
                         "details": "State the user-observable success outcomes.",
-                        "suggested_fix": "Rewrite the success criteria and test plan around observable outcomes.",
                     }
                 ],
             },
@@ -231,7 +279,6 @@ def test_full_run_retries_until_success_and_locks_spec(tmp_path: Path) -> None:
                         "category": "test_gap",
                         "title": "Regression test missing",
                         "details": "The implementation summary says coverage is missing.",
-                        "suggested_fix": "Add the regression test and rerun pytest.",
                     }
                 ],
             },
@@ -433,7 +480,6 @@ def test_exhausted_spec_rounds_ship_latest_draft_for_approval(tmp_path: Path) ->
                         "severity": "high",
                         "title": "Missing detail",
                         "details": "Tighten the criteria.",
-                        "suggested_fix": "Be specific.",
                     }
                 ],
             },
@@ -445,7 +491,6 @@ def test_exhausted_spec_rounds_ship_latest_draft_for_approval(tmp_path: Path) ->
                         "severity": "high",
                         "title": "Missing detail",
                         "details": "Tighten the criteria.",
-                        "suggested_fix": "Be specific.",
                     }
                 ],
             },
@@ -512,7 +557,6 @@ def test_exhausted_spec_rounds_lock_latest_draft_when_approval_disabled(tmp_path
                         "severity": "medium",
                         "title": "Missing detail",
                         "details": "Tighten the criteria.",
-                        "suggested_fix": "Be specific.",
                     }
                 ],
             },
@@ -576,7 +620,6 @@ def test_failed_implementation_run_report_keeps_completed_round_count(tmp_path: 
                         "category": "bug",
                         "title": "Still broken",
                         "details": "The repo is not ready.",
-                        "suggested_fix": "Finish the change.",
                     }
                 ],
             },
@@ -590,7 +633,6 @@ def test_failed_implementation_run_report_keeps_completed_round_count(tmp_path: 
                         "category": "bug",
                         "title": "Still broken",
                         "details": "The repo is not ready.",
-                        "suggested_fix": "Finish the change.",
                     }
                 ],
             },
@@ -604,7 +646,6 @@ def test_failed_implementation_run_report_keeps_completed_round_count(tmp_path: 
                         "category": "bug",
                         "title": "Still broken",
                         "details": "The repo is not ready.",
-                        "suggested_fix": "Finish the change.",
                     }
                 ],
             },
@@ -618,7 +659,6 @@ def test_failed_implementation_run_report_keeps_completed_round_count(tmp_path: 
                         "category": "bug",
                         "title": "Still broken",
                         "details": "The repo is not ready.",
-                        "suggested_fix": "Finish the change.",
                     }
                 ],
             },
@@ -667,7 +707,6 @@ def _seed_interrupted_session(repo_root: Path) -> MissionArtifacts:
                 "category": "bug",
                 "title": "Open",
                 "details": "Finish it.",
-                "suggested_fix": "Finish.",
             }
         ],
     }
@@ -975,7 +1014,6 @@ def test_fallback_is_per_round_not_sticky(tmp_path: Path) -> None:
                         "category": "issue",
                         "title": "Polish",
                         "details": "Polish things up.",
-                        "suggested_fix": "Polish.",
                     }
                 ],
             },
@@ -1397,7 +1435,6 @@ def test_interactive_mission_approval_renders_summary_instead_of_raw_markdown(
                 severity="high",
                 title="Rollback coverage missing",
                 details="The current plan changes a public CLI without a deterministic rollback test.",
-                suggested_fix="Add the rollback test before sign-off.",
             )
         ],
         high_stakes_decisions=[
@@ -1915,7 +1952,6 @@ def test_render_implementation_round_report_contains_key_fragments() -> None:
                 category="test_gap",
                 title="Revocation tests missing",
                 details="No integration coverage for /revoke.",
-                suggested_fix="Add tests/test_revocation.py.",
             )
         ],
         completed_criteria=["Middleware wired", "Rotation live"],
@@ -1959,7 +1995,6 @@ def test_render_mission_approval_card_contains_focus_and_blockers() -> None:
                 severity="high",
                 title="Rollback test missing",
                 details="The mission changes the public API but does not require a deterministic rollback test.",
-                suggested_fix="Add an automated rollback test to the test plan.",
             )
         ],
         high_stakes_decisions=[
@@ -2388,7 +2423,6 @@ def test_user_approval_feedback_survives_subsequent_codex_rejection(tmp_path: Pa
                         "severity": "high",
                         "title": "CODEX_ROUND_TWO_GAP",
                         "details": "More detail needed.",
-                        "suggested_fix": "Expand the behavior list.",
                     }
                 ],
             },

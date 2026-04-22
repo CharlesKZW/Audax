@@ -106,6 +106,49 @@ def render_startup_card(stream: TextIO, info_lines: list[str] | None = None) -> 
     )
 
 
+def read_task_interactive() -> str:
+    """Read a mission prompt via a Codex-style input box.
+
+    Renders a single ``>`` prompt with a shaded background. Long input wraps
+    visually onto the next line; Enter submits; Alt+Enter inserts a newline so
+    the user can compose multi-line prompts.
+    """
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.lexers import SimpleLexer
+    from prompt_toolkit.styles import Style
+
+    bindings = KeyBindings()
+
+    @bindings.add("enter")
+    def _submit(event) -> None:
+        event.current_buffer.validate_and_handle()
+
+    @bindings.add("escape", "enter")
+    def _newline(event) -> None:
+        event.current_buffer.insert_text("\n")
+
+    style = Style.from_dict({
+        "prompt": "bg:#2b2b2b fg:#5fafff bold",
+        "input": "bg:#2b2b2b",
+    })
+
+    session = PromptSession(
+        message=FormattedText([("class:prompt", "> ")]),
+        multiline=True,
+        wrap_lines=True,
+        style=style,
+        lexer=SimpleLexer(style="class:input"),
+        key_bindings=bindings,
+    )
+
+    try:
+        return session.prompt()
+    except EOFError:
+        return ""
+
+
 def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) -> str:
     """Render the rich TTY header card for an Audax mission run."""
     approval_mode = "required" if config.require_mission_approval else "auto"
@@ -328,13 +371,6 @@ def render_mission_approval_card(
                     lines.append(f"      {detail}")
                 if len(detail_lines) > ISSUE_DETAIL_MAX_LINES:
                     lines.append(_style("      ...", MUTED_ANSI, color=color))
-            if issue.suggested_fix:
-                fix_label = _style("Fix:", LABEL_ANSI, color=color)
-                fix_text_lines = textwrap.wrap(issue.suggested_fix, width=content_width - 10)
-                if fix_text_lines:
-                    lines.append(f"      {fix_label} {fix_text_lines[0]}")
-                    for extra in fix_text_lines[1:]:
-                        lines.append(f"           {extra}")
     else:
         lines.append(
             _style(
@@ -447,13 +483,6 @@ def _reviewer_box(
                     lines.append(f"      {detail}")
                 if len(detail_lines) > ISSUE_DETAIL_MAX_LINES:
                     lines.append(_style("      ...", MUTED_ANSI, color=color))
-            if issue.suggested_fix:
-                fix_label = _style("Fix:", LABEL_ANSI, color=color)
-                fix_text_lines = textwrap.wrap(issue.suggested_fix, width=content_width - 10)
-                if fix_text_lines:
-                    lines.append(f"      {fix_label} {fix_text_lines[0]}")
-                    for extra in fix_text_lines[1:]:
-                        lines.append(f"           {extra}")
     else:
         lines.append("")
         lines.append(_style("No outstanding issues.", GOOD_ANSI, color=color))

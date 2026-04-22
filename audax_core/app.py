@@ -42,7 +42,7 @@ from .models import (
 )
 from .orchestrator import ReviewLoopOrchestrator
 from .progress import QuietProcessRunner
-from .ui import render_startup_card, supports_rich_terminal
+from .ui import read_task_interactive, render_startup_card, supports_rich_terminal
 
 
 def ensure_cli_available(cmd: str) -> None:
@@ -173,6 +173,7 @@ def build_startup_card_info_lines(
     args: argparse.Namespace,
     *,
     repo_root: Path | None = None,
+    interactive: bool = False,
 ) -> list[str]:
     """Build the rich startup-card summary shown before stdin task entry."""
     repo_root = repo_root or Path.cwd()
@@ -185,9 +186,14 @@ def build_startup_card_info_lines(
         "subprocess_timeout_seconds",
         DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
     )
+    submit_hint = (
+        "Press Enter to submit. Alt+Enter inserts a new line."
+        if interactive
+        else "Press Ctrl-D when you are done."
+    )
     return [
         "Enter the mission prompt for Audax.",
-        "Press Ctrl-D when you are done.",
+        submit_hint,
         f"Audax will make changes in: {repo_root}",
         "",
         "Adjustable flags for this session:",
@@ -248,13 +254,33 @@ def read_task(args: argparse.Namespace) -> str:
     """Resolve the mission request from positional arguments or stdin."""
     if args.task:
         return " ".join(args.task).strip()
-    if supports_rich_terminal(sys.stdout):
-        sys.stdout.write(render_startup_card(sys.stdout, build_startup_card_info_lines(args)))
+    rich = supports_rich_terminal(sys.stdout)
+    interactive = rich and _stdin_is_tty()
+    if rich:
+        sys.stdout.write(
+            render_startup_card(
+                sys.stdout,
+                build_startup_card_info_lines(args, interactive=interactive),
+            )
+        )
         sys.stdout.flush()
     else:
         print("Enter the mission prompt for Audax.")
         print("Press Ctrl-D when you are done.\n")
+    if interactive:
+        return read_task_interactive().strip()
     return sys.stdin.read().strip()
+
+
+def _stdin_is_tty() -> bool:
+    """Return whether stdin is attached to a TTY."""
+    isatty = getattr(sys.stdin, "isatty", None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except (OSError, ValueError):
+        return False
 
 
 @contextmanager

@@ -286,7 +286,6 @@ class ReviewIssue:
     title: str
     details: str
     category: str = "issue"
-    suggested_fix: str = ""
 
 
 @dataclass

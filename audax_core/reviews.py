@@ -70,9 +70,8 @@ def issue_schema(*, include_category: bool) -> dict[str, Any]:
         "severity": {"type": "string"},
         "title": {"type": "string"},
         "details": {"type": "string"},
-        "suggested_fix": {"type": "string"},
     }
-    required = ["severity", "title", "details", "suggested_fix"]
+    required = ["severity", "title", "details"]
     if include_category:
         properties["category"] = {"type": "string"}
         required.append("category")
@@ -142,7 +141,6 @@ def parse_issues(payload: Any, *, default_category: str) -> list[ReviewIssue]:
                 title=str(item.get("title", "")).strip(),
                 details=str(item.get("details", "")).strip(),
                 category=str(item.get("category", default_category)).strip() or default_category,
-                suggested_fix=str(item.get("suggested_fix", "")).strip(),
             )
         )
     return issues
@@ -185,8 +183,6 @@ def render_review_feedback(issues: list[ReviewIssue], *, summary: str) -> str:
             f"{idx}. [{issue.severity.upper()} | {issue.category}] {issue.title}\n"
             f"{issue.details}"
         )
-        if issue.suggested_fix:
-            lines.append(f"Suggested fix: {issue.suggested_fix}")
         lines.append("")
     return "\n".join(lines).strip()
 
