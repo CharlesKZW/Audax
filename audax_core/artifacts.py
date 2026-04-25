@@ -42,3 +42,14 @@ def assert_mission_spec_locked(artifacts: MissionArtifacts) -> None:
     current_md_hash = sha256_file(artifacts.mission_spec_md)
     if current_md_hash != expected_md_hash:
         raise RuntimeError("Mission spec lock mismatch: locked mission markdown was modified")
+
+
+def load_locked_mission_spec(artifacts: MissionArtifacts) -> LockedMissionSpec:
+    """Load the current locked mission spec after validating its digest."""
+    assert_mission_spec_locked(artifacts)
+    manifest = json.loads(artifacts.mission_spec_lock.read_text(encoding="utf-8"))
+    markdown_text = artifacts.mission_spec_md.read_text(encoding="utf-8")
+    return LockedMissionSpec(
+        markdown_text=markdown_text,
+        markdown_sha256=str(manifest["markdown_sha256"]),
+    )

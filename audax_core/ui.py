@@ -135,6 +135,13 @@ def style_warning(label: str, *, color: bool) -> str:
     return _style(label, "1;38;5;208", color=color)
 
 
+def style_approval_mode(required: bool, *, color: bool) -> str:
+    """Return a styled mission-approval mode label."""
+    if required:
+        return _style("required", GOOD_ANSI, color=color)
+    return _style("auto", "1;38;5;208", color=color)
+
+
 def read_task_interactive() -> str:
     """Read a mission prompt via a Codex-style input box.
 
@@ -180,42 +187,45 @@ def read_task_interactive() -> str:
 
 def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) -> str:
     """Render the rich TTY header card for an Audax mission run."""
-    approval_mode = "required" if config.require_mission_approval else "auto"
-    return _render_card(
-        stream=stream,
-        title="AUDAX COLLABORATIVE MISSION LOOP",
-        info_lines=[
-            f"Task: {task}",
-            f"Repo: {config.repo_root}",
-            f"Workspace: {config.workspace_dir}",
-            f"Spec rounds max: {config.max_spec_rounds}",
-            f"Implementation rounds max: {config.max_implementation_rounds}",
-            f"Mission approval: {approval_mode}",
-        ],
-    )
-
-
-def _render_card(
-    *,
-    stream: TextIO,
-    title: str,
-    info_lines: list[str],
-) -> str:
+    del stream  # kept for signature symmetry with other render helpers
     color = os.environ.get("NO_COLOR") is None
     total_width = _card_width()
     content_width = total_width - 4
-    wrapped_info = _wrap_lines(info_lines, width=content_width)
-
-    rendered_lines = [
-        f"╭{'─' * (total_width - 2)}╮",
-        f"│ {_pad_ansi(_style(title, '1;38;5;117', color=color), content_width)} │",
-        f"├{'─' * (total_width - 2)}┤",
+    approval_mode = style_approval_mode(config.require_mission_approval, color=color)
+    info_lines: list[str] = [
+        style_section_header("Mission Brief", color=color),
+        *_wrap_detail_row("Task", task, content_width, color=color),
+        *_wrap_detail_row("Repo", str(config.repo_root), content_width, color=color),
+        *_wrap_detail_row("Workspace", str(config.workspace_dir), content_width, color=color),
+        "",
+        style_section_header("Execution Budget", color=color),
+        *_wrap_detail_row(
+            "Spec rounds max",
+            str(config.max_spec_rounds),
+            content_width,
+            color=color,
+        ),
+        *_wrap_detail_row(
+            "Implementation rounds max",
+            str(config.max_implementation_rounds),
+            content_width,
+            color=color,
+        ),
+        *_wrap_detail_row(
+            "Mission approval",
+            approval_mode,
+            content_width,
+            color=color,
+            plain_value="required" if config.require_mission_approval else "auto",
+        ),
     ]
-    for info_line in wrapped_info:
-        styled = _style(info_line, '38;5;252', color=color)
-        rendered_lines.append(f"│ {_pad_ansi(styled, content_width)} │")
-    rendered_lines.append(f"╰{'─' * (total_width - 2)}╯")
-    return "\n".join(rendered_lines) + "\n"
+    return _compose_card(
+        title="AUDAX COLLABORATIVE MISSION LOOP",
+        body_lines=info_lines,
+        total_width=total_width,
+        content_width=content_width,
+        color=color,
+    )
 
 
 def _card_width() -> int:
@@ -283,6 +293,27 @@ def parse_markdown_sections(text: str) -> dict[str, list[str]]:
         if bullet_match is not None:
             current.append(bullet_match.group(1).strip())
     return sections
+
+
+def _wrap_detail_row(
+    label: str,
+    value: str,
+    width: int,
+    *,
+    color: bool,
+    plain_value: str | None = None,
+    indent: str = "  ",
+) -> list[str]:
+    """Wrap a label/value row with aligned continuation lines."""
+    plain_prefix = f"{indent}{label}: "
+    styled_prefix = f"{indent}{_style(f'{label}:', LABEL_ANSI, color=color)} "
+    clean_value = plain_value if plain_value is not None else ANSI_PATTERN.sub("", value)
+    wrapped_value = textwrap.wrap(clean_value, width=max(1, width - len(plain_prefix))) or [""]
+    lines = [f"{styled_prefix}{value if len(wrapped_value) == 1 else wrapped_value[0]}"]
+    continuation = " " * len(plain_prefix)
+    for extra in wrapped_value[1:]:
+        lines.append(f"{continuation}{extra}")
+    return lines
 
 
 def render_implementer_round_box(

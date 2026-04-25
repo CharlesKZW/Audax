@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,7 @@ from audax_core.models import (
     DEFAULT_WORKSPACE_DIR,
     LockedMissionSpec,
     MissionReview,
+    find_continuable_sessions,
     find_resumable_sessions,
     load_session_manifest,
     session_id_from_timestamp,
@@ -732,6 +734,53 @@ def _seed_interrupted_session(repo_root: Path) -> MissionArtifacts:
     return artifacts
 
 
+def _seed_unlocked_spec_session(repo_root: Path) -> MissionArtifacts:
+    """Seed a session with only a draft mission spec and no lock file."""
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    artifacts.ensure_directories()
+    artifacts.mission_spec_md.write_text(
+        "# Mission\nShip from draft\n\n"
+        "## Mission Success Criteria\n- Observable outcome exists\n\n"
+        "## Required Behaviors\n- Continue from the saved draft\n\n"
+        "## Test Plan\n- pytest -q\n\n"
+        "## Constraints And Non-Goals\n- No extra drafting round\n",
+        encoding="utf-8",
+    )
+    artifacts.write_json(
+        artifacts.session_manifest_path,
+        {
+            "session_id": artifacts.session_id,
+            "task": "Ship from draft",
+            "status": "failed",
+            "success": False,
+            "started_at": artifacts.started_at,
+            "ended_at": "",
+            "error": "Mission approval requested changes after max spec rounds",
+            "final_summary": "",
+            "repo_root": str(repo_root),
+            "workspace_dir": str(artifacts.workspace_dir),
+            "session_dir": str(artifacts.session_dir),
+            "config": {},
+            "mission_spec_review": {
+                "approved": False,
+                "summary": "Latest review asked for one more change.",
+                "feedback": "Needs product-surface requirement.",
+            },
+            "artifacts": {
+                "session_manifest_path": str(artifacts.session_manifest_path),
+                "event_log_path": str(artifacts.event_log_path),
+                "mission_spec_md": str(artifacts.mission_spec_md),
+                "mission_spec_lock": str(artifacts.mission_spec_lock),
+                "prompts_dir": str(artifacts.prompts_dir),
+                "outputs_dir": str(artifacts.outputs_dir),
+                "reviews_dir": str(artifacts.reviews_dir),
+                "report_path": str(artifacts.report_path),
+            },
+        },
+    )
+    return artifacts
+
+
 def test_resume_continues_failed_session_against_locked_spec(tmp_path: Path) -> None:
     repo_root = tmp_path
     seeded = _seed_interrupted_session(repo_root)
@@ -799,6 +848,75 @@ def test_resume_continues_failed_session_against_locked_spec(tmp_path: Path) -> 
 
     # Succeeded sessions are no longer offered as resumable candidates.
     assert find_resumable_sessions(workspace_dir) == []
+
+
+def test_continue_session_locks_existing_draft_spec(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    seeded = _seed_unlocked_spec_session(repo_root)
+    workspace_dir = repo_root / DEFAULT_WORKSPACE_DIR
+
+    assert [entry[0] for entry in find_continuable_sessions(workspace_dir)] == [
+        seeded.session_id
+    ]
+    assert find_resumable_sessions(workspace_dir) == []
+
+    artifacts = MissionArtifacts.from_workspace(
+        workspace_dir,
+        session_id=seeded.session_id,
+        started_at=seeded.started_at,
+    )
+
+    claude = FakeClaude(
+        [
+            "## Accomplished\n- Implemented from the saved draft\n\n"
+            "## Tests Run\n- pytest -q\n\n"
+            "## Remaining Risks\n- None\n",
+        ]
+    )
+    codex = FakeCodex(
+        [
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Mission complete after draft continue.",
+                "issues": [],
+            }
+        ]
+    )
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=io.StringIO(),
+    )
+
+    result = orchestrator.continue_session("Ship from draft")
+
+    assert result.success is True
+    assert result.mission_spec_rounds == 0
+    assert artifacts.mission_spec_lock.exists()
+    assert_mission_spec_locked(artifacts)
+    assert "Locked mission spec" in claude.calls[0][1]
+
+    manifest_after = load_session_manifest(workspace_dir, seeded.session_id)
+    assert manifest_after["status"] == "succeeded"
+    assert manifest_after["mission_spec_review"]["summary"] == (
+        "Latest review asked for one more change."
+    )
+    assert manifest_after["mission_spec_review"]["feedback"] == (
+        "Needs product-surface requirement."
+    )
+
+    events = [
+        json.loads(line)
+        for line in artifacts.event_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    mission_locked = next(event for event in events if event["type"] == "mission_locked")
+    assert mission_locked["locked_on_continue"] is True
+    assert any(event["type"] == "session_resumed" for event in events)
 
 
 def test_resume_rehydrates_last_codex_feedback_into_first_round(tmp_path: Path) -> None:
@@ -1142,6 +1260,52 @@ def test_continue_main_errors_when_no_resumable_session(
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "No resumable sessions found" in captured.err
+
+
+def test_continue_main_uses_draft_only_session_when_no_lock_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo_root = tmp_path
+    seeded = _seed_unlocked_spec_session(repo_root)
+    workspace_dir = repo_root / DEFAULT_WORKSPACE_DIR
+
+    assert [entry[0] for entry in find_continuable_sessions(workspace_dir)] == [
+        seeded.session_id
+    ]
+
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr("audax_core.app.ensure_cli_available", lambda cmd: None)
+
+    calls: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        def continue_session(self, task: str) -> SimpleNamespace:
+            calls["task"] = task
+            return SimpleNamespace(
+                success=True,
+                session_dir=str(seeded.session_dir),
+                mission_spec_md=str(seeded.mission_spec_md),
+                report_path=str(seeded.report_path),
+            )
+
+    def fake_build_orchestrator(**kwargs) -> FakeOrchestrator:
+        calls["artifacts"] = kwargs["artifacts"]
+        return FakeOrchestrator()
+
+    monkeypatch.setattr("audax_core.app._build_orchestrator", fake_build_orchestrator)
+
+    exit_code = continue_main([])
+
+    assert exit_code == 0
+    assert calls["task"] == "Ship from draft"
+    artifacts = calls["artifacts"]
+    assert isinstance(artifacts, MissionArtifacts)
+    assert artifacts.session_id == seeded.session_id
+
+    captured = capsys.readouterr()
+    assert f"Continuing session {seeded.session_id} with task: Ship from draft" in captured.out
 
 
 def test_heartbeat_progress_reports_without_streaming_payload() -> None:
@@ -2199,6 +2363,8 @@ def test_orchestrator_uses_current_stdout_by_default(tmp_path: Path) -> None:
 
 
 def test_render_session_header_card_uses_box_layout() -> None:
+    from audax_core.ui import ANSI_PATTERN
+
     class FakeTTY(io.StringIO):
         def isatty(self) -> bool:
             return True
@@ -2215,12 +2381,15 @@ def test_render_session_header_card_uses_box_layout() -> None:
         config,
         FakeTTY(),
     )
+    plain = ANSI_PATTERN.sub("", rendered)
 
-    assert "AUDAX COLLABORATIVE MISSION LOOP" in rendered
-    assert "Task:" in rendered
-    assert "Repo:" in rendered
-    assert "Workspace:" in rendered
-    assert "Mission approval: required" in rendered
+    assert "AUDAX COLLABORATIVE MISSION LOOP" in plain
+    assert "── Mission Brief" in plain
+    assert "Task:" in plain
+    assert "Repo:" in plain
+    assert "Workspace:" in plain
+    assert "── Execution Budget" in plain
+    assert "Mission approval: required" in plain
     assert "╭" in rendered and "╰" in rendered
 
 
@@ -2261,8 +2430,7 @@ def test_render_startup_card_uses_box_layout() -> None:
     assert "model: gpt-5.5" in plain
     assert "reasoning effort: xhigh" in plain
     assert "╭" in rendered and "╰" in rendered
-    # Bold markers for flag labels get translated to ANSI bold.
-    assert "\x1b[1m--spec-rounds\x1b[22m" in rendered
+    assert "**--spec-rounds**" not in plain
 
 
 def test_build_repo_context_handles_symlinked_repo_root(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@
    .. autosummary::
    
       allocate_session_id
+      find_continuable_sessions
       find_resumable_sessions
       load_session_manifest
       session_id_from_timestamp

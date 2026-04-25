@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import json
 import os
 from pathlib import Path
 import signal
 import shutil
 import sys
 
-from .artifacts import assert_mission_spec_locked
+from .artifacts import load_locked_mission_spec
 from .auto_commit import AutoCommitter
 from .backends import (
     CLAUDE_INCLUDE_PARTIAL_MESSAGES,
@@ -38,6 +37,7 @@ from .models import (
     LockedMissionSpec,
     LoopConfig,
     MissionArtifacts,
+    find_continuable_sessions,
     find_resumable_sessions,
     load_session_manifest,
 )
@@ -114,9 +114,10 @@ def parse_continue_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="audax continue",
         description=(
-            "Resume an interrupted Audax session against its already-locked "
-            "mission spec. With no session id, resumes the most recent "
-            "incomplete session in the workspace."
+            "Continue an interrupted Audax session from its locked mission "
+            "spec or current mission_spec.md draft. With no session id, "
+            "continues the most recent incomplete session in the workspace "
+            "that still has a usable mission spec."
         ),
     )
     parser.add_argument(
@@ -394,7 +395,7 @@ def run_main(argv: list[str]) -> int:
 
 
 def continue_main(argv: list[str]) -> int:
-    """Resume an existing Audax session against its locked mission spec."""
+    """Continue an existing Audax session from its current mission spec."""
     args = parse_continue_args(argv)
     try:
         with forward_termination_signals():
@@ -408,7 +409,7 @@ def continue_main(argv: list[str]) -> int:
             repo_root = Path.cwd()
             workspace_dir = resolve_workspace_dir(repo_root, args.workspace_dir)
 
-            session_id = args.session_id or _pick_latest_resumable_session_id(workspace_dir)
+            session_id = args.session_id or _pick_latest_continuable_session_id(workspace_dir)
             manifest = load_session_manifest(workspace_dir, session_id)
             task = str(manifest.get("task", "")).strip()
             if not task:
@@ -432,14 +433,6 @@ def continue_main(argv: list[str]) -> int:
                 session_id=session_id,
                 started_at=str(manifest.get("started_at", "")) or None,
             )
-            if not artifacts.mission_spec_lock.exists():
-                print(
-                    f"Session {session_id} has no locked mission spec; cannot resume.",
-                    file=sys.stderr,
-                )
-                return 1
-
-            locked_spec = _load_locked_spec(artifacts)
 
             config = LoopConfig(
                 repo_root=repo_root,
@@ -465,8 +458,8 @@ def continue_main(argv: list[str]) -> int:
                 repo_root=repo_root,
                 auto_committer=auto_committer,
             )
-            print(f"Resuming session {session_id} with task: {task}")
-            result = orchestrator.resume(task, locked_spec)
+            print(f"Continuing session {session_id} with task: {task}")
+            result = orchestrator.continue_session(task)
             print(
                 f"\nResume complete. Session: {result.session_dir}\n"
                 f"Locked spec: {result.mission_spec_md}\n"
@@ -510,11 +503,14 @@ def _pick_latest_resumable_session_id(workspace_dir: Path) -> str:
     return candidates[0][0]
 
 
+def _pick_latest_continuable_session_id(workspace_dir: Path) -> str:
+    candidates = find_continuable_sessions(workspace_dir)
+    if not candidates:
+        raise RuntimeError(
+            f"No resumable sessions found under {workspace_dir / 'sessions'}"
+        )
+    return candidates[0][0]
+
+
 def _load_locked_spec(artifacts: MissionArtifacts) -> LockedMissionSpec:
-    assert_mission_spec_locked(artifacts)
-    manifest = json.loads(artifacts.mission_spec_lock.read_text(encoding="utf-8"))
-    markdown_text = artifacts.mission_spec_md.read_text(encoding="utf-8")
-    return LockedMissionSpec(
-        markdown_text=markdown_text,
-        markdown_sha256=str(manifest["markdown_sha256"]),
-    )
+    return load_locked_mission_spec(artifacts)

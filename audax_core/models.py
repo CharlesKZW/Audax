@@ -48,15 +48,22 @@ def session_id_from_timestamp(timestamp: str, *, pid: int | None = None) -> str:
     return f"{token}_pid{pid or os.getpid()}"
 
 
-def find_resumable_sessions(
-    workspace_dir: Path,
-) -> list[tuple[str, Path, dict[str, Any]]]:
-    """Return resumable sessions newest first.
+def _has_nonempty_mission_spec(path: Path) -> bool:
+    """Return whether a mission spec markdown file exists and has content."""
+    if not path.exists():
+        return False
+    try:
+        return bool(path.read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
 
-    A session is resumable when the mission spec has already been locked
-    (``mission_spec.lock.json`` exists) and the run has not been recorded as
-    ``succeeded``. Each tuple is ``(session_id, session_dir, manifest)``.
-    """
+
+def _find_incomplete_sessions_with_spec(
+    workspace_dir: Path,
+    *,
+    include_draft_specs: bool,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Return incomplete sessions with usable mission specs, newest first."""
     sessions_dir = workspace_dir / "sessions"
     if not sessions_dir.is_dir():
         return []
@@ -65,7 +72,10 @@ def find_resumable_sessions(
     for entry in sorted(sessions_dir.iterdir(), key=lambda p: p.name, reverse=True):
         if not entry.is_dir():
             continue
-        if not (entry / "mission_spec.lock.json").exists():
+        has_locked_spec = (entry / "mission_spec.lock.json").exists()
+        if not has_locked_spec and not include_draft_specs:
+            continue
+        if not has_locked_spec and not _has_nonempty_mission_spec(entry / "mission_spec.md"):
             continue
         manifest_path = entry / "session_manifest.json"
         if not manifest_path.exists():
@@ -78,6 +88,37 @@ def find_resumable_sessions(
             continue
         found.append((entry.name, entry, manifest))
     return found
+
+
+def find_resumable_sessions(
+    workspace_dir: Path,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Return resumable sessions newest first.
+
+    A session is resumable when the mission spec has already been locked
+    (``mission_spec.lock.json`` exists) and the run has not been recorded as
+    ``succeeded``. Each tuple is ``(session_id, session_dir, manifest)``.
+    """
+    return _find_incomplete_sessions_with_spec(
+        workspace_dir,
+        include_draft_specs=False,
+    )
+
+
+def find_continuable_sessions(
+    workspace_dir: Path,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Return incomplete sessions with either locked or draft mission specs.
+
+    Unlike :func:`find_resumable_sessions`, this also includes sessions that do
+    not yet have ``mission_spec.lock.json`` but do have a non-empty
+    ``mission_spec.md``. This supports `audax continue` after spec approval ran
+    out of rounds but still left a mission draft behind.
+    """
+    return _find_incomplete_sessions_with_spec(
+        workspace_dir,
+        include_draft_specs=True,
+    )
 
 
 def load_session_manifest(workspace_dir: Path, session_id: str) -> dict[str, Any]:

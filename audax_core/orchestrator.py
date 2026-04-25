@@ -9,7 +9,7 @@ import sys
 from typing import Callable, TextIO
 
 from .approval import interactive_mission_approval
-from .artifacts import assert_mission_spec_locked, lock_mission_spec
+from .artifacts import assert_mission_spec_locked, load_locked_mission_spec, lock_mission_spec
 from .auto_commit import AutoCommitter, CommitOutcome
 from .models import (
     ApprovalDecision,
@@ -121,6 +121,23 @@ class ReviewLoopOrchestrator:
             prepare_locked_spec=load_existing,
             resumed=True,
             initial_feedback=self._load_latest_implementation_feedback(),
+            initial_mission_spec_review=self._load_mission_spec_review_snapshot(),
+        )
+
+    def continue_session(self, task: str) -> RunSummary:
+        """Continue a session from a locked spec or an existing draft spec."""
+
+        def load_existing(existing_task: str) -> LockedMissionSpec:
+            if self.artifacts.mission_spec_lock.exists():
+                return load_locked_mission_spec(self.artifacts)
+            return self._lock_existing_mission_spec_draft(existing_task)
+
+        return self._execute_mission(
+            task,
+            prepare_locked_spec=load_existing,
+            resumed=True,
+            initial_feedback=self._load_latest_implementation_feedback(),
+            initial_mission_spec_review=self._load_mission_spec_review_snapshot(),
         )
 
     def _execute_mission(
@@ -130,13 +147,12 @@ class ReviewLoopOrchestrator:
         prepare_locked_spec: Callable[[str], LockedMissionSpec],
         resumed: bool,
         initial_feedback: str = "",
+        initial_mission_spec_review: dict[str, object] | None = None,
     ) -> RunSummary:
         """Shared lifecycle for fresh runs and resumed runs."""
         self._mission_spec_rounds_run = 0
         self._implementation_rounds_run = 0
-        self._latest_mission_spec_review_approved = None
-        self._latest_mission_spec_review_summary = ""
-        self._latest_mission_spec_review_feedback = ""
+        self._restore_mission_spec_review_snapshot(initial_mission_spec_review)
         final_summary = ""
         error = ""
         success = False
@@ -721,6 +737,7 @@ class ReviewLoopOrchestrator:
         *,
         task: str,
         locked_after_round_limit: bool = False,
+        locked_on_continue: bool = False,
     ) -> LockedMissionSpec:
         """Lock the current mission spec and persist the event trail."""
         locked_spec = lock_mission_spec(current_spec, self.artifacts, task)
@@ -730,6 +747,7 @@ class ReviewLoopOrchestrator:
             mission_spec_lock=self.artifacts.mission_spec_lock,
             markdown_sha256=locked_spec.markdown_sha256,
             locked_after_round_limit=locked_after_round_limit,
+            locked_on_continue=locked_on_continue,
             latest_review_approved=self._latest_mission_spec_review_approved,
             latest_review_summary=self._latest_mission_spec_review_summary,
             latest_review_feedback=self._latest_mission_spec_review_feedback,
@@ -942,6 +960,65 @@ class ReviewLoopOrchestrator:
         if review.mission_accomplished and not review.has_issues:
             return ""
         return render_review_feedback(review.issues, summary=review.summary)
+
+    def _load_mission_spec_review_snapshot(self) -> dict[str, object] | None:
+        """Return the prior session's latest mission-spec review snapshot."""
+        if not self.artifacts.session_manifest_path.exists():
+            return None
+        try:
+            manifest = json.loads(
+                self.artifacts.session_manifest_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return None
+        snapshot = manifest.get("mission_spec_review")
+        if not isinstance(snapshot, dict):
+            return None
+        approved = snapshot.get("approved")
+        if approved not in {True, False, None}:
+            approved = None
+        return {
+            "approved": approved,
+            "summary": str(snapshot.get("summary", "")),
+            "feedback": str(snapshot.get("feedback", "")),
+        }
+
+    def _restore_mission_spec_review_snapshot(
+        self,
+        snapshot: dict[str, object] | None,
+    ) -> None:
+        """Seed the in-memory mission-spec review state for this run."""
+        if snapshot is None:
+            self._latest_mission_spec_review_approved = None
+            self._latest_mission_spec_review_summary = ""
+            self._latest_mission_spec_review_feedback = ""
+            return
+        approved = snapshot.get("approved")
+        self._latest_mission_spec_review_approved = (
+            approved if approved in {True, False, None} else None
+        )
+        self._latest_mission_spec_review_summary = str(snapshot.get("summary", ""))
+        self._latest_mission_spec_review_feedback = str(snapshot.get("feedback", ""))
+
+    def _lock_existing_mission_spec_draft(self, task: str) -> LockedMissionSpec:
+        """Promote the current mission draft into a locked implementation baseline."""
+        if not self.artifacts.mission_spec_md.exists():
+            raise RuntimeError(
+                f"Session {self.artifacts.session_id} has no mission_spec.md; cannot continue."
+            )
+        current_spec = self.artifacts.mission_spec_md.read_text(encoding="utf-8").strip()
+        if not current_spec:
+            raise RuntimeError(
+                f"Session {self.artifacts.session_id} has an empty mission_spec.md; cannot continue."
+            )
+        self._write_line(
+            "[Resume] found an unlocked mission spec draft; locking it and entering implementation"
+        )
+        return self._lock_current_mission_spec(
+            current_spec,
+            task=task,
+            locked_on_continue=True,
+        )
 
     def _config_snapshot(self) -> dict[str, object]:
         return {
