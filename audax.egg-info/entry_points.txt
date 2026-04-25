@@ -1,0 +1,2 @@
+[console_scripts]
+audax = audax_core.app:main

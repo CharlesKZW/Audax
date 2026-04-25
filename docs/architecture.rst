@@ -54,7 +54,7 @@ Claude implements, Codex reviews — with automatic fallback
 
 Two frontier models at maximum reasoning effort
    Claude Opus with ``reasoning effort=max`` is paired with Codex
-   ``gpt-5.4`` at ``model_reasoning_effort=xhigh``. Using two top-tier models
+   ``gpt-5.5`` at ``model_reasoning_effort=xhigh``. Using two top-tier models
    on opposite sides of the loop makes the review signal meaningful, but it
    also makes each run expensive and slow relative to a one-shot call to a
    default model. The constants live at the top of ``audax_core/backends.py``

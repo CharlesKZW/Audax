@@ -2258,7 +2258,7 @@ def test_render_startup_card_uses_box_layout() -> None:
     assert "── Codex Runtime" in plain
     assert "model: opus" in plain
     assert "reasoning effort: max" in plain
-    assert "model: gpt-5.4" in plain
+    assert "model: gpt-5.5" in plain
     assert "reasoning effort: xhigh" in plain
     assert "╭" in rendered and "╰" in rendered
     # Bold markers for flag labels get translated to ANSI bold.

@@ -42,7 +42,7 @@ section before pointing it at a repository you care about.
 
    * Claude: ``model=opus``, ``reasoning effort=max``, streamed JSON output
      with partial messages enabled.
-   * Codex: ``model=gpt-5.4``, ``model_reasoning_effort=xhigh``, structured
+   * Codex: ``model=gpt-5.5``, ``model_reasoning_effort=xhigh``, structured
      JSON output validated against a schema.
 
    These settings optimize for review quality over price and latency. Expect

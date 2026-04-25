@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audax"
+version = "0.1.0"
+description = "Audax collaborative review loop for landing audacious engineering changes."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "prompt_toolkit>=3.0",
+]
+
+[project.optional-dependencies]
+docs = [
+    "Sphinx>=8,<9",
+    "pydata-sphinx-theme>=0.16",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
+]
+test = [
+    "pytest>=8",
+]
+
+[project.scripts]
+audax = "audax_core.app:main"
+
+[tool.setuptools.packages.find]
+include = ["audax_core*"]

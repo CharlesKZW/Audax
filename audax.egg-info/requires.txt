@@ -1,0 +1,10 @@
+prompt_toolkit>=3.0
+
+[docs]
+Sphinx<9,>=8
+pydata-sphinx-theme>=0.16
+sphinx-copybutton>=0.5
+sphinx-design>=0.6
+
+[test]
+pytest>=8
