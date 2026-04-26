@@ -17,11 +17,11 @@ Arguments And Options
    captured text as the mission prompt.
 
 ``--mode``
-   Execution mode. ``mission-spec`` (the default) drafts, reviews, and locks
-   ``mission_spec.md`` before implementation. ``direct-instruction`` skips
-   mission-spec drafting entirely, locks the original prompt as
-   ``direct_instruction.txt``, and asks the reviewer to judge completion
-   directly against that original request.
+   Execution mode. ``direct-instruction`` (the default) skips mission-spec
+   drafting entirely, locks the original prompt as ``direct_instruction.txt``,
+   and asks the reviewer to judge completion directly against that original
+   request. ``mission-spec`` drafts, reviews, and locks ``mission_spec.md``
+   before implementation.
 
 ``--spec-rounds``
    Maximum number of mission-drafting rounds before the run fails. Default:
@@ -111,17 +111,17 @@ Run with tighter review bounds and a custom workspace:
      --workspace-dir audax_auth_artifacts \
      "Harden the authentication stack and add integration coverage"
 
-Run with interactive approval disabled:
+Run in mission-spec mode with interactive approval disabled:
 
 .. code-block:: bash
 
-   python audax.py --no-require-approval "Refactor the billing webhooks module"
+   python audax.py --mode mission-spec --no-require-approval "Refactor the billing webhooks module"
 
-Run in direct-instruction mode:
+Run in mission-spec mode:
 
 .. code-block:: bash
 
-   python audax.py --mode direct-instruction "Implement the request exactly as written"
+   python audax.py --mode mission-spec "Implement the request after drafting a mission spec"
 
 The ``continue`` Subcommand
 ---------------------------

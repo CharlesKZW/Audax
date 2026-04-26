@@ -4,24 +4,24 @@ Workflow
 Execution Model
 ---------------
 
-Audax runs as a bounded control loop with separate drafting and implementation
-phases:
+Audax runs as a bounded control loop with an optional drafting phase followed
+by implementation and review:
 
 .. code-block:: text
 
    user task
-     -> Claude drafts mission_spec.md
-     -> Codex reviews the draft against the task and repo rules
-     -> human approval by default
-     -> mission spec is locked as markdown + SHA-256 checksum manifest
+     -> original prompt is locked as direct_instruction.txt
      -> Claude implements against the locked mission
      -> Codex reviews the live repository state
      -> repeat until success or round limit
 
-The default ``mission-spec`` mode follows the full drafting path above.
-``direct-instruction`` mode skips the drafting and approval stages, locks the
-original prompt as ``direct_instruction.txt``, and then runs the same
-implementation/review loop against that prompt directly.
+The default ``direct-instruction`` mode skips drafting and approval, locks the
+original prompt as ``direct_instruction.txt``, and then runs the
+implementation/review loop against that prompt directly. ``mission-spec`` mode
+adds a drafting phase before implementation: Claude drafts ``mission_spec.md``,
+Codex reviews the draft against the task and repo rules, a human approval gate
+can run, and the approved spec is locked as markdown plus a SHA-256 checksum
+manifest.
 
 Mission Drafting
 ----------------
@@ -55,7 +55,7 @@ and surfaces the latest reject message.
 Direct Instruction Mode
 -----------------------
 
-When ``--mode direct-instruction`` is selected, Audax does not draft
+When ``direct-instruction`` mode is used, Audax does not draft
 ``mission_spec.md`` at all. Instead it:
 
 * writes the original user request to ``direct_instruction.txt``,
@@ -71,7 +71,7 @@ coherent set of criteria needed to judge completion.
 Mission Approval And Locking
 ----------------------------
 
-By default, a user can:
+In ``mission-spec`` mode, a user can:
 
 * review a compact approval card showing the high-stakes decisions plus any
   unresolved reviewer sign-off blockers,

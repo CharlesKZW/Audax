@@ -94,9 +94,9 @@ The simplest invocation passes the mission request as positional arguments:
 
 Useful runtime options:
 
-* ``--mode`` chooses between the default ``mission-spec`` flow and the
-  ``direct-instruction`` flow, which skips spec drafting and locks the
-  original prompt directly.
+* ``--mode`` chooses between the default ``direct-instruction`` flow, which
+  skips spec drafting and locks the original prompt directly, and the
+  ``mission-spec`` flow.
 * ``--spec-rounds`` bounds the number of draft-and-review cycles used to refine
   ``mission_spec.md`` in ``mission-spec`` mode.
 * ``--implementation-rounds`` bounds the implementation-review loop after the
@@ -153,7 +153,7 @@ default layout is:
        diffable, and easy to analyze after the fact with standard tools.
    * - ``mission_spec.md``
      - Locked mission source used by implementation and review prompts in the
-       default ``mission-spec`` mode.
+       optional ``mission-spec`` mode.
    * - ``mission_spec.lock.json``
      - SHA-256 checksum manifest used to detect unauthorized changes to the
        locked mission markdown.

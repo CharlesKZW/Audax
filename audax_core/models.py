@@ -17,9 +17,10 @@ DEFAULT_SUBPROCESS_TIMEOUT_SECONDS: float | None = None
 DEFAULT_WORKSPACE_DIR = "audax_artifacts"
 MISSION_MODE_SPEC = "mission-spec"
 MISSION_MODE_DIRECT = "direct-instruction"
+DEFAULT_MISSION_MODE = MISSION_MODE_DIRECT
 MISSION_MODE_CHOICES = (
-    MISSION_MODE_SPEC,
     MISSION_MODE_DIRECT,
+    MISSION_MODE_SPEC,
 )
 CLAUDE_CMD = os.environ.get("CLAUDE_CMD", "claude")
 CODEX_CMD = os.environ.get("CODEX_CMD", "codex")
@@ -179,7 +180,7 @@ class LoopConfig:
 
     repo_root: Path
     workspace_dir: Path
-    mission_mode: str = MISSION_MODE_SPEC
+    mission_mode: str = DEFAULT_MISSION_MODE
     max_spec_rounds: int = DEFAULT_SPEC_ROUNDS
     max_implementation_rounds: int = DEFAULT_IMPLEMENTATION_ROUNDS
     require_mission_approval: bool = True
@@ -187,6 +188,11 @@ class LoopConfig:
     subprocess_timeout_seconds: float | None = DEFAULT_SUBPROCESS_TIMEOUT_SECONDS
     claude_cmd: str = CLAUDE_CMD
     codex_cmd: str = CODEX_CMD
+
+    def __post_init__(self) -> None:
+        if self.mission_mode == MISSION_MODE_DIRECT:
+            self.max_spec_rounds = 0
+            self.require_mission_approval = False
 
 
 @dataclass

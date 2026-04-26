@@ -534,10 +534,10 @@ def test_lock_manifest_detects_mutation(tmp_path: Path) -> None:
         assert_mission_spec_locked(artifacts)
 
 
-def test_parse_args_defaults_use_shorter_rounds_and_require_approval() -> None:
+def test_parse_args_defaults_to_direct_instruction_mode() -> None:
     args = parse_args([])
 
-    assert args.mode == MISSION_MODE_SPEC
+    assert args.mode == MISSION_MODE_DIRECT
     assert args.spec_rounds == 3
     assert args.implementation_rounds == 5
     assert args.require_approval is True
@@ -549,10 +549,10 @@ def test_parse_args_can_disable_approval() -> None:
     assert args.require_approval is False
 
 
-def test_parse_args_accepts_direct_instruction_mode() -> None:
-    args = parse_args(["--mode", MISSION_MODE_DIRECT])
+def test_parse_args_accepts_mission_spec_mode() -> None:
+    args = parse_args(["--mode", MISSION_MODE_SPEC])
 
-    assert args.mode == MISSION_MODE_DIRECT
+    assert args.mode == MISSION_MODE_SPEC
 
 
 def test_exhausted_spec_rounds_ship_latest_draft_for_approval(tmp_path: Path) -> None:
@@ -606,6 +606,7 @@ def test_exhausted_spec_rounds_ship_latest_draft_for_approval(tmp_path: Path) ->
         config=LoopConfig(
             repo_root=repo_root,
             workspace_dir=repo_root / DEFAULT_WORKSPACE_DIR,
+            mission_mode=MISSION_MODE_SPEC,
             max_spec_rounds=2,
             max_implementation_rounds=4,
             require_mission_approval=True,
@@ -672,6 +673,7 @@ def test_exhausted_spec_rounds_lock_latest_draft_when_approval_disabled(tmp_path
         config=LoopConfig(
             repo_root=repo_root,
             workspace_dir=repo_root / DEFAULT_WORKSPACE_DIR,
+            mission_mode=MISSION_MODE_SPEC,
             max_spec_rounds=1,
             max_implementation_rounds=2,
             require_mission_approval=False,
@@ -2552,8 +2554,9 @@ def test_render_session_header_card_uses_box_layout() -> None:
     assert "Repo:" in plain
     assert "Workspace:" in plain
     assert "── Execution Budget" in plain
-    assert "Mode: mission-spec" in plain
-    assert "Mission approval: required" in plain
+    assert "Mode: direct-instruction" in plain
+    assert "Spec rounds max: skipped" in plain
+    assert "Mission approval: n/a" in plain
     assert "╭" in rendered and "╰" in rendered
 
 

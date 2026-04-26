@@ -9,6 +9,7 @@ from .artifacts import (
 )
 from .models import (
     ApprovalDecision,
+    DEFAULT_MISSION_MODE,
     LoopConfig,
     MISSION_MODE_DIRECT,
     MISSION_MODE_SPEC,
@@ -19,6 +20,7 @@ from .progress import HeartbeatProgress
 
 __all__ = [
     "ApprovalDecision",
+    "DEFAULT_MISSION_MODE",
     "HeartbeatProgress",
     "LoopConfig",
     "MISSION_MODE_DIRECT",

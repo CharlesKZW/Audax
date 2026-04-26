@@ -140,14 +140,14 @@ positional task argument and finish stdin with ``Ctrl-D``:
 What Audax Guarantees
 ---------------------
 
-* **Outcome-level mission specs.** Drafts are reviewed to keep success
-  criteria focused on user-observable behavior and major architectural
-  decisions, avoiding unnecessary exact UI strings, test identifiers, and
-  implementation details.
-* **Locked mission contract.** The spec is reviewed before implementation
-  and then locked as markdown plus a SHA-256 checksum manifest. The
-  orchestrator verifies the markdown digest around every implementation
-  round and fails fast if the contract has been mutated.
+* **Outcome-level mission specs.** In ``mission-spec`` mode, drafts are
+  reviewed to keep success criteria focused on user-observable behavior and
+  major architectural decisions, avoiding unnecessary exact UI strings, test
+  identifiers, and implementation details.
+* **Locked mission contract.** The original prompt is locked by default; in
+  ``mission-spec`` mode, the reviewed spec is locked instead. The orchestrator
+  verifies the locked text digest around every implementation round and fails
+  fast if the contract has been mutated.
 * **Centralized backend behavior.** Claude and Codex run through explicit
   CLI adapters instead of ad hoc shell glue, so the exact flags used are
   visible in ``audax_core/backends.py`` and on the startup card.
@@ -156,8 +156,8 @@ What Audax Guarantees
 * **Opt-in subprocess timeout.** No subprocess timeout by default; pass
   ``--subprocess-timeout-seconds`` to cap hung agent CLIs.
 * **Resumable sessions.** ``python audax.py continue`` re-enters an
-  interrupted session against its already-locked mission spec, without
-  re-drafting or re-approving.
+  interrupted session against its already-locked mission contract, without
+  recreating or re-approving it.
 
 .. toctree::
    :hidden:

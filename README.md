@@ -11,11 +11,12 @@ regressions, and re-prompting the agent until the work actually holds
 together. Audax collapses that loop into **one long-running, structured
 session**:
 
-- 🧑‍💻 **Human** states the mission once and, in the default mode, approves a
-  _locked_ mission spec.
-- ✍️ **Claude** drafts the spec, then implements against the locked mission.
-- 🔍 **Codex** reviews both the spec and the live repo, emitting structured
-  JSON findings.
+- 🧑‍💻 **Human** states the mission once; by default Audax locks that original
+  prompt directly.
+- ✍️ **Claude** implements against the locked instruction. In `mission-spec`
+  mode, Claude drafts a spec first.
+- 🔍 **Codex** reviews the live repo, emitting structured JSON findings. In
+  `mission-spec` mode, Codex also reviews the draft spec.
 - 🔁 **Orchestrator** feeds reviews back into Claude until the mission is
   accomplished or the round budget is spent.
 
@@ -70,20 +71,15 @@ Audax tries to make audacious work reliable by construction rather than by hope.
 
 ```
 user task
-  ─▶ Claude drafts mission_spec.md
-  ─▶ Codex reviews the draft against the task and repo rules
-  ─▶ human approval (default)
-  ─▶ mission spec is locked as markdown + SHA-256 checksum manifest
+  ─▶ original prompt is locked as direct_instruction.txt + SHA-256 checksum manifest
   ─▶ Claude implements against the locked mission
   ─▶ Codex reviews the live repository state (structured JSON)
   ─▶ repeat until success or round limit
 ```
 
-Audax also supports a `direct-instruction` mode. In that mode the original
-user prompt is locked directly as `direct_instruction.txt`, mission-spec
-drafting and approval are skipped, Claude implements against that locked
-prompt, and Codex reviews the repo against the original request instead of a
-generated spec.
+`direct-instruction` is the default mode. `mission-spec` mode is still
+available when you want Audax to draft and review `mission_spec.md` before
+implementation; pass `--mode mission-spec` to use that flow.
 
 Mission specs are intentionally outcome-level. Success criteria should describe
 user-observable behavior, while the spec captures only major architectural
@@ -176,7 +172,7 @@ python audax.py "Add JWT auth middleware with refresh token rotation"
 
 **Useful flags:**
 
-- `--mode mission-spec` or `--mode direct-instruction`
+- `--mode direct-instruction` or `--mode mission-spec`
 - `--spec-rounds 3`
 - `--implementation-rounds 5`
 - `--require-approval` / `--no-require-approval`
@@ -187,14 +183,15 @@ python audax.py "Add JWT auth middleware with refresh token rotation"
 - `--auto-commit` / `--no-auto-commit` — the implementer (Claude by default, Codex on fallback) is instructed to commit logical chunks as it works; Audax then runs a final **sweeper** commit per round to capture any trailing uncommitted work, so one round can yield many commits rather than one monolithic dump (default **on**; silently skipped when not a git repo)
 - `--session-branch` / `--no-session-branch` — check out a dedicated `audax/<session_id>` branch to keep commits off your main branch (default **off**; commits land on the current branch)
 
-`mission-spec` is the default mode. `direct-instruction` skips mission-spec
-drafting entirely, ignores `--spec-rounds`, and does not use the interactive
-approval gate.
+`direct-instruction` is the default mode. It skips mission-spec drafting
+entirely, ignores `--spec-rounds`, and does not use the interactive approval
+gate. `mission-spec` mode drafts, reviews, and locks `mission_spec.md` before
+implementation.
 
 ### Resuming An Interrupted Session
 
 If a session is killed mid-implementation (Ctrl-C, SIGTERM, crash, reboot),
-you can pick it back up without re-drafting the mission spec:
+you can pick it back up without recreating the locked mission contract:
 
 ```bash
 python audax.py continue                     # resume the most recent incomplete session
@@ -202,8 +199,8 @@ python audax.py continue 20260413T181500Z_pid42   # resume a specific session
 ```
 
 Only sessions that already have a locked mission contract are resumable:
-`mission_spec.lock.json` in the default mode or `direct_instruction.lock.json`
-in direct-instruction mode. The SHA-256 digest in the lock manifest is
+`direct_instruction.lock.json` in the default mode or `mission_spec.lock.json`
+in mission-spec mode. The SHA-256 digest in the lock manifest is
 re-verified before any implementation round runs, so resume will refuse to
 continue if the locked contract text has been tampered with.
 
@@ -218,22 +215,25 @@ from repo state.
 
 ## Behavior
 
-- Claude drafts `mission_spec.md`.
-- Codex reviews the draft against the request and repo rules.
+- In the default `direct-instruction` mode, Audax locks the original prompt as
+  `direct_instruction.txt`.
+- In `mission-spec` mode, Claude drafts `mission_spec.md` and Codex reviews
+  the draft against the request and repo rules.
 - The draft is expected to stay focused on user-observable outcomes and major
   architectural decisions, not implementation minutiae or exact test/UI
   identifiers.
-- User approval is **required by default** before the mission is locked.
-- If Codex still has open objections when spec rounds are exhausted, Audax
-  ships the latest draft for a final human decision and shows the latest
-  reject message.
+- User approval is required by default only in `mission-spec` mode before the
+  mission is locked.
+- In `mission-spec` mode, if Codex still has open objections when spec rounds
+  are exhausted, Audax ships the latest draft for a final human decision and
+  shows the latest reject message.
 - Each run creates a timestamped session directory under
   `audax_artifacts/sessions/`.
-- The mission is locked as `mission_spec.md` and `mission_spec.lock.json`
-  (SHA-256 manifest) inside that session.
-- In `direct-instruction` mode, the original prompt is locked instead as
+- In `direct-instruction` mode, the original prompt is locked as
   `direct_instruction.txt` and `direct_instruction.lock.json`, and review
   progress is derived from the request itself rather than a drafted spec.
+- In `mission-spec` mode, the mission is locked as `mission_spec.md` and
+  `mission_spec.lock.json` (SHA-256 manifest) inside that session.
 - Claude implements against the locked mission.
 - Codex reviews for bugs, missing requirements, repo-policy gaps, and test
   gaps.

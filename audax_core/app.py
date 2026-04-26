@@ -31,6 +31,7 @@ from .models import (
     CODEX_CMD,
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_IMPLEMENTATION_ROUNDS,
+    DEFAULT_MISSION_MODE,
     MISSION_MODE_CHOICES,
     MISSION_MODE_DIRECT,
     MISSION_MODE_SPEC,
@@ -71,11 +72,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=MISSION_MODE_CHOICES,
-        default=MISSION_MODE_SPEC,
+        default=DEFAULT_MISSION_MODE,
         help=(
             "Execution mode. "
-            "`mission-spec` drafts and locks a reviewed mission spec; "
-            "`direct-instruction` skips spec drafting and locks the original prompt directly."
+            "`direct-instruction` skips spec drafting and locks the original prompt directly; "
+            "`mission-spec` drafts and locks a reviewed mission spec."
         ),
     )
     parser.add_argument("--spec-rounds", type=int, default=DEFAULT_SPEC_ROUNDS)
@@ -201,7 +202,7 @@ def build_startup_card_info_lines(
     """Build the rich startup-card summary shown before stdin task entry."""
     color = os.environ.get("NO_COLOR") is None
     repo_root = repo_root or Path.cwd()
-    mission_mode = getattr(args, "mode", MISSION_MODE_SPEC)
+    mission_mode = getattr(args, "mode", DEFAULT_MISSION_MODE)
     workspace_dir = resolve_workspace_dir(
         repo_root,
         getattr(args, "workspace_dir", DEFAULT_WORKSPACE_DIR),
