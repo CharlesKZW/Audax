@@ -30,10 +30,9 @@ section before pointing it at a repository you care about.
    ephemeral container, or a disposable VM. Do not point it at a working tree
    with uncommitted changes you cannot afford to lose.
 
-   Audax does take one structural precaution: after the mission spec is
-   locked, it verifies the SHA-256 digest of the locked markdown around
-   each implementation round and fails the run if the contract has been
-   mutated.
+   Audax does take one structural precaution: after the mission contract is
+   locked, it verifies the SHA-256 digest of the locked text around each
+   implementation round and fails the run if the contract has been mutated.
 
 .. warning::
 
@@ -95,15 +94,19 @@ The simplest invocation passes the mission request as positional arguments:
 
 Useful runtime options:
 
+* ``--mode`` chooses between the default ``mission-spec`` flow and the
+  ``direct-instruction`` flow, which skips spec drafting and locks the
+  original prompt directly.
 * ``--spec-rounds`` bounds the number of draft-and-review cycles used to refine
-  ``mission_spec.md``.
+  ``mission_spec.md`` in ``mission-spec`` mode.
 * ``--implementation-rounds`` bounds the implementation-review loop after the
   mission is locked.
 * ``--workspace-dir`` moves generated artifacts out of the default
   ``audax_artifacts`` directory.
 * ``--require-approval`` keeps the default interactive approval gate enabled
-  before the mission is locked.
-* ``--no-require-approval`` disables that approval gate.
+  before the mission is locked in ``mission-spec`` mode.
+* ``--no-require-approval`` disables that approval gate in
+  ``mission-spec`` mode.
 * ``--subprocess-timeout-seconds`` optionally terminates a wedged ``claude``
   or ``codex`` subprocess after the given number of seconds. Unset by
   default.
@@ -124,6 +127,8 @@ default layout is:
          events.jsonl
          mission_spec.md
          mission_spec.lock.json
+         direct_instruction.txt
+         direct_instruction.lock.json
          run_report.json
          prompts/
          claude/
@@ -147,10 +152,17 @@ default layout is:
      - Append-only event log. JSON Lines is used here because it is stable,
        diffable, and easy to analyze after the fact with standard tools.
    * - ``mission_spec.md``
-     - Locked mission source used by implementation and review prompts.
+     - Locked mission source used by implementation and review prompts in the
+       default ``mission-spec`` mode.
    * - ``mission_spec.lock.json``
      - SHA-256 checksum manifest used to detect unauthorized changes to the
        locked mission markdown.
+   * - ``direct_instruction.txt``
+     - Locked original prompt used in ``direct-instruction`` mode instead of a
+       drafted mission spec.
+   * - ``direct_instruction.lock.json``
+     - SHA-256 checksum manifest used to detect unauthorized changes to the
+       locked direct-instruction text.
    * - ``prompts/``
      - Timestamped prompts sent to Claude and Codex for every mission and
        review round.

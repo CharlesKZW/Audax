@@ -31,6 +31,9 @@ from .models import (
     CODEX_CMD,
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_IMPLEMENTATION_ROUNDS,
+    MISSION_MODE_CHOICES,
+    MISSION_MODE_DIRECT,
+    MISSION_MODE_SPEC,
     DEFAULT_SPEC_ROUNDS,
     DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_DIR,
@@ -65,6 +68,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for a fresh Audax mission."""
     parser = argparse.ArgumentParser(description="Audax collaborative review loop")
     parser.add_argument("task", nargs="*", help="Mission request. If omitted, stdin is used.")
+    parser.add_argument(
+        "--mode",
+        choices=MISSION_MODE_CHOICES,
+        default=MISSION_MODE_SPEC,
+        help=(
+            "Execution mode. "
+            "`mission-spec` drafts and locks a reviewed mission spec; "
+            "`direct-instruction` skips spec drafting and locks the original prompt directly."
+        ),
+    )
     parser.add_argument("--spec-rounds", type=int, default=DEFAULT_SPEC_ROUNDS)
     parser.add_argument("--implementation-rounds", type=int, default=DEFAULT_IMPLEMENTATION_ROUNDS)
     parser.add_argument("--workspace-dir", default=DEFAULT_WORKSPACE_DIR)
@@ -188,6 +201,7 @@ def build_startup_card_info_lines(
     """Build the rich startup-card summary shown before stdin task entry."""
     color = os.environ.get("NO_COLOR") is None
     repo_root = repo_root or Path.cwd()
+    mission_mode = getattr(args, "mode", MISSION_MODE_SPEC)
     workspace_dir = resolve_workspace_dir(
         repo_root,
         getattr(args, "workspace_dir", DEFAULT_WORKSPACE_DIR),
@@ -200,6 +214,18 @@ def build_startup_card_info_lines(
 
     def toggle(flag: bool) -> str:
         return style_enabled(color=color) if flag else style_disabled(color=color)
+
+    mode_label = mission_mode
+    spec_rounds_value = (
+        "skipped in direct-instruction mode"
+        if mission_mode == MISSION_MODE_DIRECT
+        else str(getattr(args, "spec_rounds", DEFAULT_SPEC_ROUNDS))
+    )
+    approval_value = (
+        style_disabled("n/a in direct-instruction mode", color=color)
+        if mission_mode == MISSION_MODE_DIRECT
+        else toggle(getattr(args, "require_approval", True))
+    )
 
     submit_hint = (
         "Press **Enter** to submit · **Alt+Enter** inserts a new line."
@@ -224,7 +250,8 @@ def build_startup_card_info_lines(
         f"Target repository: `{repo_root}`",
         "",
         style_section_header("Session Flags", color=color),
-        f"  **--spec-rounds**: {getattr(args, 'spec_rounds', DEFAULT_SPEC_ROUNDS)}",
+        f"  **--mode**: {mode_label}",
+        f"  **--spec-rounds**: {spec_rounds_value}",
         (
             "  **--implementation-rounds**: "
             f"{getattr(args, 'implementation_rounds', DEFAULT_IMPLEMENTATION_ROUNDS)}"
@@ -232,7 +259,7 @@ def build_startup_card_info_lines(
         f"  **--workspace-dir**: `{workspace_dir}`",
         (
             "  **--require-approval/--no-require-approval**: "
-            f"{toggle(getattr(args, 'require_approval', True))}"
+            f"{approval_value}"
         ),
         f"  **--heartbeat-seconds**: {_format_seconds(getattr(args, 'heartbeat_seconds', DEFAULT_HEARTBEAT_SECONDS))}",
         (
@@ -341,7 +368,10 @@ def run_main(argv: list[str]) -> int:
             if not task:
                 print("No mission request provided.", file=sys.stderr)
                 return 1
-            if args.spec_rounds <= 0 or args.implementation_rounds <= 0:
+            if args.implementation_rounds <= 0:
+                print("Round counts must be positive integers.", file=sys.stderr)
+                return 1
+            if args.mode == MISSION_MODE_SPEC and args.spec_rounds <= 0:
                 print("Round counts must be positive integers.", file=sys.stderr)
                 return 1
             if args.subprocess_timeout_seconds is not None and args.subprocess_timeout_seconds < 0:
@@ -357,9 +387,12 @@ def run_main(argv: list[str]) -> int:
             config = LoopConfig(
                 repo_root=repo_root,
                 workspace_dir=workspace_dir,
-                max_spec_rounds=args.spec_rounds,
+                mission_mode=args.mode,
+                max_spec_rounds=0 if args.mode == MISSION_MODE_DIRECT else args.spec_rounds,
                 max_implementation_rounds=args.implementation_rounds,
-                require_mission_approval=args.require_approval,
+                require_mission_approval=(
+                    False if args.mode == MISSION_MODE_DIRECT else args.require_approval
+                ),
                 heartbeat_seconds=args.heartbeat_seconds,
                 subprocess_timeout_seconds=(
                     None if args.subprocess_timeout_seconds == 0 else args.subprocess_timeout_seconds
@@ -382,7 +415,7 @@ def run_main(argv: list[str]) -> int:
             result = orchestrator.run(task)
             print(
                 f"\nMission complete. Session: {result.session_dir}\n"
-                f"Locked spec: {result.mission_spec_md}\n"
+                f"{result.locked_contract_label}: {result.locked_contract_path}\n"
                 f"Run report: {result.report_path}"
             )
             return 0
@@ -427,6 +460,12 @@ def continue_main(argv: list[str]) -> int:
 
             ensure_cli_available(args.claude_cmd)
             ensure_cli_available(args.codex_cmd)
+            config_snapshot = manifest.get("config", {})
+            if not isinstance(config_snapshot, dict):
+                config_snapshot = {}
+            mission_mode = _normalize_mission_mode(
+                config_snapshot.get("mission_mode", MISSION_MODE_SPEC)
+            )
 
             artifacts = MissionArtifacts.from_workspace(
                 workspace_dir,
@@ -437,7 +476,8 @@ def continue_main(argv: list[str]) -> int:
             config = LoopConfig(
                 repo_root=repo_root,
                 workspace_dir=workspace_dir,
-                max_spec_rounds=1,
+                mission_mode=mission_mode,
+                max_spec_rounds=0 if mission_mode == MISSION_MODE_DIRECT else 1,
                 max_implementation_rounds=args.implementation_rounds,
                 require_mission_approval=False,
                 heartbeat_seconds=args.heartbeat_seconds,
@@ -462,7 +502,7 @@ def continue_main(argv: list[str]) -> int:
             result = orchestrator.continue_session(task)
             print(
                 f"\nResume complete. Session: {result.session_dir}\n"
-                f"Locked spec: {result.mission_spec_md}\n"
+                f"{result.locked_contract_label}: {result.locked_contract_path}\n"
                 f"Run report: {result.report_path}"
             )
             return 0 if result.success else 1
@@ -510,6 +550,14 @@ def _pick_latest_continuable_session_id(workspace_dir: Path) -> str:
             f"No resumable sessions found under {workspace_dir / 'sessions'}"
         )
     return candidates[0][0]
+
+
+def _normalize_mission_mode(raw_mode: object) -> str:
+    """Return a supported mission mode, defaulting invalid values safely."""
+    mode = str(raw_mode or "").strip()
+    if mode in MISSION_MODE_CHOICES:
+        return mode
+    return MISSION_MODE_SPEC
 
 
 def _load_locked_spec(artifacts: MissionArtifacts) -> LockedMissionSpec:

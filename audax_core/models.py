@@ -15,6 +15,12 @@ DEFAULT_IMPLEMENTATION_ROUNDS = 5
 DEFAULT_HEARTBEAT_SECONDS = 5.0
 DEFAULT_SUBPROCESS_TIMEOUT_SECONDS: float | None = None
 DEFAULT_WORKSPACE_DIR = "audax_artifacts"
+MISSION_MODE_SPEC = "mission-spec"
+MISSION_MODE_DIRECT = "direct-instruction"
+MISSION_MODE_CHOICES = (
+    MISSION_MODE_SPEC,
+    MISSION_MODE_DIRECT,
+)
 CLAUDE_CMD = os.environ.get("CLAUDE_CMD", "claude")
 CODEX_CMD = os.environ.get("CODEX_CMD", "codex")
 RULE_FILENAMES = (
@@ -48,8 +54,8 @@ def session_id_from_timestamp(timestamp: str, *, pid: int | None = None) -> str:
     return f"{token}_pid{pid or os.getpid()}"
 
 
-def _has_nonempty_mission_spec(path: Path) -> bool:
-    """Return whether a mission spec markdown file exists and has content."""
+def _has_nonempty_text_artifact(path: Path) -> bool:
+    """Return whether a text artifact exists and has non-empty contents."""
     if not path.exists():
         return False
     try:
@@ -58,12 +64,12 @@ def _has_nonempty_mission_spec(path: Path) -> bool:
         return False
 
 
-def _find_incomplete_sessions_with_spec(
+def _find_incomplete_sessions_with_contract(
     workspace_dir: Path,
     *,
     include_draft_specs: bool,
 ) -> list[tuple[str, Path, dict[str, Any]]]:
-    """Return incomplete sessions with usable mission specs, newest first."""
+    """Return incomplete sessions with usable locked or draft contracts."""
     sessions_dir = workspace_dir / "sessions"
     if not sessions_dir.is_dir():
         return []
@@ -73,9 +79,15 @@ def _find_incomplete_sessions_with_spec(
         if not entry.is_dir():
             continue
         has_locked_spec = (entry / "mission_spec.lock.json").exists()
-        if not has_locked_spec and not include_draft_specs:
+        has_locked_direct_instruction = (entry / "direct_instruction.lock.json").exists()
+        if not has_locked_spec and not has_locked_direct_instruction and not include_draft_specs:
             continue
-        if not has_locked_spec and not _has_nonempty_mission_spec(entry / "mission_spec.md"):
+        if (
+            not has_locked_spec
+            and not has_locked_direct_instruction
+            and not _has_nonempty_text_artifact(entry / "mission_spec.md")
+            and not _has_nonempty_text_artifact(entry / "direct_instruction.txt")
+        ):
             continue
         manifest_path = entry / "session_manifest.json"
         if not manifest_path.exists():
@@ -95,11 +107,12 @@ def find_resumable_sessions(
 ) -> list[tuple[str, Path, dict[str, Any]]]:
     """Return resumable sessions newest first.
 
-    A session is resumable when the mission spec has already been locked
-    (``mission_spec.lock.json`` exists) and the run has not been recorded as
-    ``succeeded``. Each tuple is ``(session_id, session_dir, manifest)``.
+    A session is resumable when its mission contract has already been locked
+    (for example ``mission_spec.lock.json`` or ``direct_instruction.lock.json``)
+    and the run has not been recorded as ``succeeded``. Each tuple is
+    ``(session_id, session_dir, manifest)``.
     """
-    return _find_incomplete_sessions_with_spec(
+    return _find_incomplete_sessions_with_contract(
         workspace_dir,
         include_draft_specs=False,
     )
@@ -108,14 +121,15 @@ def find_resumable_sessions(
 def find_continuable_sessions(
     workspace_dir: Path,
 ) -> list[tuple[str, Path, dict[str, Any]]]:
-    """Return incomplete sessions with either locked or draft mission specs.
+    """Return incomplete sessions with either locked or draft mission contracts.
 
     Unlike :func:`find_resumable_sessions`, this also includes sessions that do
-    not yet have ``mission_spec.lock.json`` but do have a non-empty
-    ``mission_spec.md``. This supports `audax continue` after spec approval ran
-    out of rounds but still left a mission draft behind.
+    not yet have a lock file but do have a non-empty saved contract text such
+    as ``mission_spec.md`` or ``direct_instruction.txt``. This supports
+    ``audax continue`` after an interrupted run left behind draft contract
+    state.
     """
-    return _find_incomplete_sessions_with_spec(
+    return _find_incomplete_sessions_with_contract(
         workspace_dir,
         include_draft_specs=True,
     )
@@ -165,6 +179,7 @@ class LoopConfig:
 
     repo_root: Path
     workspace_dir: Path
+    mission_mode: str = MISSION_MODE_SPEC
     max_spec_rounds: int = DEFAULT_SPEC_ROUNDS
     max_implementation_rounds: int = DEFAULT_IMPLEMENTATION_ROUNDS
     require_mission_approval: bool = True
@@ -185,6 +200,8 @@ class MissionArtifacts:
     session_dir: Path
     mission_spec_md: Path
     mission_spec_lock: Path
+    direct_instruction_txt: Path
+    direct_instruction_lock: Path
     prompts_dir: Path
     outputs_dir: Path
     reviews_dir: Path
@@ -214,6 +231,8 @@ class MissionArtifacts:
             session_dir=session_dir,
             mission_spec_md=session_dir / "mission_spec.md",
             mission_spec_lock=session_dir / "mission_spec.lock.json",
+            direct_instruction_txt=session_dir / "direct_instruction.txt",
+            direct_instruction_lock=session_dir / "direct_instruction.lock.json",
             prompts_dir=session_dir / "prompts",
             outputs_dir=session_dir / "outputs",
             reviews_dir=session_dir / "reviews",
@@ -382,8 +401,12 @@ class RunSummary:
     ended_at: str
     mission_spec_rounds: int
     implementation_rounds: int
+    mission_mode: str
     final_summary: str
     mission_spec_md: str
+    direct_instruction_txt: str
+    locked_contract_path: str
+    locked_contract_label: str
     event_log_path: str
     session_manifest_path: str
     report_path: str

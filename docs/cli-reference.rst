@@ -16,9 +16,16 @@ Arguments And Options
    Mission request. If omitted, Audax reads stdin until EOF and uses the full
    captured text as the mission prompt.
 
+``--mode``
+   Execution mode. ``mission-spec`` (the default) drafts, reviews, and locks
+   ``mission_spec.md`` before implementation. ``direct-instruction`` skips
+   mission-spec drafting entirely, locks the original prompt as
+   ``direct_instruction.txt``, and asks the reviewer to judge completion
+   directly against that original request.
+
 ``--spec-rounds``
    Maximum number of mission-drafting rounds before the run fails. Default:
-   ``3``.
+   ``3``. Used only in ``mission-spec`` mode.
 
 ``--implementation-rounds``
    Maximum number of implementation-review rounds before the run fails.
@@ -31,11 +38,13 @@ Arguments And Options
 
 ``--require-approval``
    Require an interactive approval decision before the mission spec is locked.
-   Enabled by default.
+   Enabled by default in ``mission-spec`` mode and not used in
+   ``direct-instruction`` mode.
 
 ``--no-require-approval``
    Disable the interactive mission approval gate and allow Audax to lock the
-   latest draft automatically when spec rounds are exhausted.
+   latest draft automatically when spec rounds are exhausted. This flag has no
+   effect in ``direct-instruction`` mode because there is no approval step.
 
 ``--heartbeat-seconds``
    Interval between sparse progress updates while Claude or Codex subprocesses
@@ -108,15 +117,22 @@ Run with interactive approval disabled:
 
    python audax.py --no-require-approval "Refactor the billing webhooks module"
 
+Run in direct-instruction mode:
+
+.. code-block:: bash
+
+   python audax.py --mode direct-instruction "Implement the request exactly as written"
+
 The ``continue`` Subcommand
 ---------------------------
 
-Resume an interrupted session against its already-locked mission spec
-instead of starting a fresh one. Only sessions that have a
-``mission_spec.lock.json`` and have not already succeeded are resumable.
-The SHA-256 digest in the lock manifest is re-verified before the
-implementation loop restarts, so a mutated ``mission_spec.md`` causes the
-resume to fail fast.
+Resume an interrupted session against its already-locked mission contract
+instead of starting a fresh one. Only sessions that have already produced a
+lock manifest (for example ``mission_spec.lock.json`` or
+``direct_instruction.lock.json``) and have not already succeeded are
+resumable. The SHA-256 digest in the lock manifest is re-verified before the
+implementation loop restarts, so a mutated locked contract causes the resume
+to fail fast.
 
 .. code-block:: bash
 

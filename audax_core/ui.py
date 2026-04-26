@@ -10,7 +10,12 @@ import textwrap
 from typing import TextIO
 import unicodedata
 
-from .models import ImplementationReview, LoopConfig, MissionReview
+from .models import (
+    ImplementationReview,
+    LoopConfig,
+    MISSION_MODE_DIRECT,
+    MissionReview,
+)
 
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 CARD_MIN_WIDTH = 84
@@ -42,6 +47,9 @@ _INLINE_BOLD_ASTERISK_PATTERN = re.compile(r"\*\*([^*\n]+?)\*\*")
 _INLINE_BOLD_UNDERSCORE_PATTERN = re.compile(r"__([^_\n]+?)__")
 INLINE_CODE_ANSI = "38;5;213"
 INLINE_BOLD_ANSI = "1"
+INPUT_BOX_BG = "#232a31"
+INPUT_BOX_FG = "#e6edf3"
+INPUT_BOX_PROMPT_FG = "#7cc7ff"
 
 
 def _strip_leading_number(item: str) -> str:
@@ -165,18 +173,18 @@ def read_task_interactive() -> str:
     def _newline(event) -> None:
         event.current_buffer.insert_text("\n")
 
-    style = Style.from_dict({
-        "prompt": "bg:#2b2b2b fg:#5fafff bold",
-        "input": "bg:#2b2b2b",
-    })
+    style = Style.from_dict(build_input_box_style_map())
 
     session = PromptSession(
-        message=FormattedText([("class:prompt", "> ")]),
+        message=FormattedText([("class:prompt", input_box_prompt_prefix())]),
         multiline=True,
         wrap_lines=True,
         style=style,
         lexer=SimpleLexer(style="class:input"),
         key_bindings=bindings,
+        prompt_continuation=lambda width, line_number, is_soft_wrap: [
+            ("class:continuation", input_box_continuation_prefix())
+        ],
     )
 
     try:
@@ -185,13 +193,43 @@ def read_task_interactive() -> str:
         return ""
 
 
+def build_input_box_style_map() -> dict[str, str]:
+    """Return the prompt-toolkit style map for the shaded mission input box."""
+    base = f"bg:{INPUT_BOX_BG} fg:{INPUT_BOX_FG}"
+    return {
+        "": base,
+        "prompt": f"{base} fg:{INPUT_BOX_PROMPT_FG} bold",
+        "input": base,
+        "continuation": base,
+    }
+
+
+def input_box_prompt_prefix() -> str:
+    """Return the styled prefix for the first line of the input box."""
+    return "  > "
+
+
+def input_box_continuation_prefix() -> str:
+    """Return the styled prefix for wrapped or continued input lines."""
+    return "    "
+
+
 def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) -> str:
     """Render the rich TTY header card for an Audax mission run."""
     del stream  # kept for signature symmetry with other render helpers
     color = os.environ.get("NO_COLOR") is None
     total_width = _card_width()
     content_width = total_width - 4
-    approval_mode = style_approval_mode(config.require_mission_approval, color=color)
+    approval_mode = (
+        style_disabled("n/a", color=color)
+        if config.mission_mode == MISSION_MODE_DIRECT
+        else style_approval_mode(config.require_mission_approval, color=color)
+    )
+    spec_rounds_value = (
+        "skipped"
+        if config.mission_mode == MISSION_MODE_DIRECT
+        else str(config.max_spec_rounds)
+    )
     info_lines: list[str] = [
         style_section_header("Mission Brief", color=color),
         *_wrap_detail_row("Task", task, content_width, color=color),
@@ -200,8 +238,14 @@ def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) ->
         "",
         style_section_header("Execution Budget", color=color),
         *_wrap_detail_row(
+            "Mode",
+            config.mission_mode,
+            content_width,
+            color=color,
+        ),
+        *_wrap_detail_row(
             "Spec rounds max",
-            str(config.max_spec_rounds),
+            spec_rounds_value,
             content_width,
             color=color,
         ),
@@ -216,7 +260,11 @@ def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) ->
             approval_mode,
             content_width,
             color=color,
-            plain_value="required" if config.require_mission_approval else "auto",
+            plain_value=(
+                "n/a"
+                if config.mission_mode == MISSION_MODE_DIRECT
+                else "required" if config.require_mission_approval else "auto"
+            ),
         ),
     ]
     return _compose_card(

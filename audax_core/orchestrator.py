@@ -9,7 +9,14 @@ import sys
 from typing import Callable, TextIO
 
 from .approval import interactive_mission_approval
-from .artifacts import assert_mission_spec_locked, load_locked_mission_spec, lock_mission_spec
+from .artifacts import (
+    assert_direct_instruction_locked,
+    assert_mission_spec_locked,
+    load_locked_direct_instruction,
+    load_locked_mission_spec,
+    lock_direct_instruction,
+    lock_mission_spec,
+)
 from .auto_commit import AutoCommitter, CommitOutcome
 from .models import (
     ApprovalDecision,
@@ -18,6 +25,8 @@ from .models import (
     ImplementationReview,
     LockedMissionSpec,
     LoopConfig,
+    MISSION_MODE_DIRECT,
+    MISSION_MODE_SPEC,
     MissionArtifacts,
     MissionReview,
     RunSummary,
@@ -97,14 +106,19 @@ class ReviewLoopOrchestrator:
 
     def run(self, task: str) -> RunSummary:
         """Execute the full mission lifecycle and persist a run report."""
+        prepare_locked_spec = (
+            self._prepare_and_lock_direct_instruction
+            if self.config.mission_mode == MISSION_MODE_DIRECT
+            else self._prepare_and_lock_mission_spec
+        )
         return self._execute_mission(
             task,
-            prepare_locked_spec=self._prepare_and_lock_mission_spec,
+            prepare_locked_spec=prepare_locked_spec,
             resumed=False,
         )
 
     def resume(self, task: str, locked_spec: LockedMissionSpec) -> RunSummary:
-        """Re-run the implementation loop against an existing locked mission spec.
+        """Re-run the implementation loop against an existing locked mission contract.
 
         When the previous session's last Codex implementation review is still
         present, its unresolved issues are rehydrated as ``initial_feedback``
@@ -113,7 +127,7 @@ class ReviewLoopOrchestrator:
         """
 
         def load_existing(_task: str) -> LockedMissionSpec:
-            assert_mission_spec_locked(self.artifacts)
+            self._assert_locked_contract()
             return locked_spec
 
         return self._execute_mission(
@@ -128,9 +142,9 @@ class ReviewLoopOrchestrator:
         """Continue a session from a locked spec or an existing draft spec."""
 
         def load_existing(existing_task: str) -> LockedMissionSpec:
-            if self.artifacts.mission_spec_lock.exists():
-                return load_locked_mission_spec(self.artifacts)
-            return self._lock_existing_mission_spec_draft(existing_task)
+            if self._contract_lock_path().exists():
+                return self._load_locked_contract()
+            return self._lock_existing_saved_contract(existing_task)
 
         return self._execute_mission(
             task,
@@ -274,8 +288,12 @@ class ReviewLoopOrchestrator:
             ended_at=ended_at,
             mission_spec_rounds=self._mission_spec_rounds_run,
             implementation_rounds=self._implementation_rounds_run,
+            mission_mode=self.config.mission_mode,
             final_summary=final_summary,
             mission_spec_md=str(self.artifacts.mission_spec_md),
+            direct_instruction_txt=str(self.artifacts.direct_instruction_txt),
+            locked_contract_path=str(self._contract_text_path()),
+            locked_contract_label=self._locked_contract_label(),
             event_log_path=str(self.artifacts.event_log_path),
             session_manifest_path=str(self.artifacts.session_manifest_path),
             report_path=str(self.artifacts.report_path),
@@ -416,10 +434,18 @@ class ReviewLoopOrchestrator:
                     user_feedback = decision.feedback.strip()
                     continue
 
-            return self._lock_current_mission_spec(
+            return self._lock_current_contract(
                 current_spec,
                 task=task,
             )
+
+    def _prepare_and_lock_direct_instruction(self, task: str) -> LockedMissionSpec:
+        """Lock the original user prompt directly and skip mission-spec drafting."""
+        self._latest_mission_spec_review_approved = None
+        self._latest_mission_spec_review_summary = ""
+        self._latest_mission_spec_review_feedback = ""
+        self._write_line("[Mission] direct-instruction mode: skipping mission spec drafting")
+        return self._lock_current_contract(task, task=task)
 
     def _run_implementation_loop(
         self,
@@ -433,19 +459,22 @@ class ReviewLoopOrchestrator:
 
         for round_num in range(1, self.config.max_implementation_rounds + 1):
             self._implementation_rounds_run = round_num
-            assert_mission_spec_locked(self.artifacts)
+            self._assert_locked_contract()
             repo_context = build_repo_context(
                 repo_root=self.config.repo_root,
                 workspace_dir=self.config.workspace_dir,
             )
+            contract_path = self._contract_text_path()
+            contract_text = contract_path.read_text(encoding="utf-8")
             self._write_line(f"[Implementation {round_num}] implementing mission")
             implementation_prompt = build_implementation_prompt(
                 task=task,
                 repo_context=repo_context,
-                mission_spec=self.artifacts.mission_spec_md.read_text(encoding="utf-8"),
-                mission_md_path=self.artifacts.mission_spec_md,
+                mission_spec=contract_text,
+                mission_md_path=contract_path,
                 locked_spec=locked_spec,
                 review_feedback=review_feedback,
+                mission_mode=self.config.mission_mode,
             )
             preferred_implementer = self._backend_name(self.implementers[0])
             implementation_prompt_path = self.artifacts.prompt_path(
@@ -481,7 +510,7 @@ class ReviewLoopOrchestrator:
                 round=round_num,
                 path=implementation_output_path,
             )
-            assert_mission_spec_locked(self.artifacts)
+            self._assert_locked_contract()
 
             self._emit_implementer_report(
                 round_num=round_num,
@@ -493,10 +522,11 @@ class ReviewLoopOrchestrator:
             implementation_review_prompt = build_implementation_review_prompt(
                 task=task,
                 repo_context=repo_context,
-                mission_spec=self.artifacts.mission_spec_md.read_text(encoding="utf-8"),
-                mission_md_path=self.artifacts.mission_spec_md,
+                mission_spec=contract_text,
+                mission_md_path=contract_path,
                 claude_summary=implementation_summary,
                 locked_spec=locked_spec,
+                mission_mode=self.config.mission_mode,
             )
             preferred_reviewer = self._backend_name(self.reviewers[0])
             implementation_review_prompt_path = self.artifacts.prompt_path(
@@ -589,6 +619,7 @@ class ReviewLoopOrchestrator:
         self._write_line(f"Task: {task}")
         self._write_line(f"Repo: {self.config.repo_root}")
         self._write_line(f"Workspace: {self.config.workspace_dir}")
+        self._write_line(f"Mode: {self.config.mission_mode}")
         self._write_line(
             f"Spec rounds max: {self.config.max_spec_rounds} | "
             f"Implementation rounds max: {self.config.max_implementation_rounds}"
@@ -731,20 +762,28 @@ class ReviewLoopOrchestrator:
         self.output_stream.write(f"{message}\n")
         self.output_stream.flush()
 
-    def _lock_current_mission_spec(
+    def _lock_current_contract(
         self,
-        current_spec: str,
+        current_text: str,
         *,
         task: str,
         locked_after_round_limit: bool = False,
         locked_on_continue: bool = False,
     ) -> LockedMissionSpec:
-        """Lock the current mission spec and persist the event trail."""
-        locked_spec = lock_mission_spec(current_spec, self.artifacts, task)
+        """Lock the current mission contract and persist the event trail."""
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            locked_spec = lock_direct_instruction(current_text, self.artifacts, task)
+        else:
+            locked_spec = lock_mission_spec(current_text, self.artifacts, task)
         self.artifacts.append_event(
             "mission_locked",
+            mission_mode=self.config.mission_mode,
+            contract_path=self._contract_text_path(),
+            contract_lock=self._contract_lock_path(),
             mission_spec_md=self.artifacts.mission_spec_md,
             mission_spec_lock=self.artifacts.mission_spec_lock,
+            direct_instruction_txt=self.artifacts.direct_instruction_txt,
+            direct_instruction_lock=self.artifacts.direct_instruction_lock,
             markdown_sha256=locked_spec.markdown_sha256,
             locked_after_round_limit=locked_after_round_limit,
             locked_on_continue=locked_on_continue,
@@ -752,10 +791,17 @@ class ReviewLoopOrchestrator:
             latest_review_summary=self._latest_mission_spec_review_summary,
             latest_review_feedback=self._latest_mission_spec_review_feedback,
         )
-        self._write_line(
-            f"[Mission] locked at {self.artifacts.mission_spec_md} "
-            f"(sha256 {locked_spec.markdown_sha256[:12]}...)"
-        )
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            message = (
+                f"[Mission] locked direct instruction at {self._contract_text_path()} "
+                f"(sha256 {locked_spec.markdown_sha256[:12]}...)"
+            )
+        else:
+            message = (
+                f"[Mission] locked at {self._contract_text_path()} "
+                f"(sha256 {locked_spec.markdown_sha256[:12]}...)"
+            )
+        self._write_line(message)
         return locked_spec
 
     def _finalize_mission_spec_after_round_limit(
@@ -804,7 +850,7 @@ class ReviewLoopOrchestrator:
             )
             self._emit_latest_mission_reject_message(reject_summary, reject_feedback)
 
-        return self._lock_current_mission_spec(
+        return self._lock_current_contract(
             current_spec,
             task=task,
             locked_after_round_limit=True,
@@ -838,6 +884,37 @@ class ReviewLoopOrchestrator:
                 stream=self.output_stream,
             )
         return self.approval_gate(mission_spec, self.artifacts.mission_spec_md)
+
+    def _contract_text_path(self) -> Path:
+        """Return the active locked-contract text path for this session mode."""
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            return self.artifacts.direct_instruction_txt
+        return self.artifacts.mission_spec_md
+
+    def _contract_lock_path(self) -> Path:
+        """Return the active lock-manifest path for this session mode."""
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            return self.artifacts.direct_instruction_lock
+        return self.artifacts.mission_spec_lock
+
+    def _locked_contract_label(self) -> str:
+        """Return the human-readable label for the active mission contract."""
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            return "Locked direct instruction"
+        return "Locked spec"
+
+    def _assert_locked_contract(self) -> None:
+        """Verify that the active locked contract has not been modified."""
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            assert_direct_instruction_locked(self.artifacts)
+            return
+        assert_mission_spec_locked(self.artifacts)
+
+    def _load_locked_contract(self) -> LockedMissionSpec:
+        """Load the active locked contract for this session mode."""
+        if self.config.mission_mode == MISSION_MODE_DIRECT:
+            return load_locked_direct_instruction(self.artifacts)
+        return load_locked_mission_spec(self.artifacts)
 
     def _backend_name(self, backend: Any) -> str:
         return getattr(backend, "name", backend.__class__.__name__.lower())
@@ -1000,22 +1077,24 @@ class ReviewLoopOrchestrator:
         self._latest_mission_spec_review_summary = str(snapshot.get("summary", ""))
         self._latest_mission_spec_review_feedback = str(snapshot.get("feedback", ""))
 
-    def _lock_existing_mission_spec_draft(self, task: str) -> LockedMissionSpec:
-        """Promote the current mission draft into a locked implementation baseline."""
-        if not self.artifacts.mission_spec_md.exists():
+    def _lock_existing_saved_contract(self, task: str) -> LockedMissionSpec:
+        """Promote a saved unlocked contract into a locked implementation baseline."""
+        contract_path = self._contract_text_path()
+        if not contract_path.exists():
             raise RuntimeError(
-                f"Session {self.artifacts.session_id} has no mission_spec.md; cannot continue."
+                f"Session {self.artifacts.session_id} has no {contract_path.name}; cannot continue."
             )
-        current_spec = self.artifacts.mission_spec_md.read_text(encoding="utf-8").strip()
-        if not current_spec:
+        current_text = contract_path.read_text(encoding="utf-8").strip()
+        if not current_text:
             raise RuntimeError(
-                f"Session {self.artifacts.session_id} has an empty mission_spec.md; cannot continue."
+                f"Session {self.artifacts.session_id} has an empty {contract_path.name}; cannot continue."
             )
         self._write_line(
-            "[Resume] found an unlocked mission spec draft; locking it and entering implementation"
+            f"[Resume] found an unlocked {self._locked_contract_label().lower()}; "
+            "locking it and entering implementation"
         )
-        return self._lock_current_mission_spec(
-            current_spec,
+        return self._lock_current_contract(
+            current_text,
             task=task,
             locked_on_continue=True,
         )
@@ -1024,6 +1103,7 @@ class ReviewLoopOrchestrator:
         return {
             "repo_root": str(self.config.repo_root),
             "workspace_dir": str(self.config.workspace_dir),
+            "mission_mode": self.config.mission_mode,
             "max_spec_rounds": self.config.max_spec_rounds,
             "max_implementation_rounds": self.config.max_implementation_rounds,
             "require_mission_approval": self.config.require_mission_approval,
@@ -1071,6 +1151,8 @@ class ReviewLoopOrchestrator:
                     "event_log_path": str(self.artifacts.event_log_path),
                     "mission_spec_md": str(self.artifacts.mission_spec_md),
                     "mission_spec_lock": str(self.artifacts.mission_spec_lock),
+                    "direct_instruction_txt": str(self.artifacts.direct_instruction_txt),
+                    "direct_instruction_lock": str(self.artifacts.direct_instruction_lock),
                     "prompts_dir": str(self.artifacts.prompts_dir),
                     "outputs_dir": str(self.artifacts.outputs_dir),
                     "reviews_dir": str(self.artifacts.reviews_dir),

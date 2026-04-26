@@ -17,9 +17,13 @@ from audax_core import (
     ApprovalDecision,
     HeartbeatProgress,
     LoopConfig,
+    MISSION_MODE_DIRECT,
+    MISSION_MODE_SPEC,
     MissionArtifacts,
     ReviewLoopOrchestrator,
+    assert_direct_instruction_locked,
     assert_mission_spec_locked,
+    lock_direct_instruction,
     lock_mission_spec,
 )
 from audax_core.approval import interactive_mission_approval
@@ -55,6 +59,9 @@ from audax_core.reviews import (
 )
 from audax_core.models import ImplementationReview, ReviewIssue
 from audax_core.ui import (
+    build_input_box_style_map,
+    input_box_continuation_prefix,
+    input_box_prompt_prefix,
     parse_markdown_sections,
     render_implementation_round_report,
     render_mission_approval_card,
@@ -119,10 +126,16 @@ class FakeCodex:
         return response
 
 
-def make_config(repo_root: Path, *, require_approval: bool = False) -> LoopConfig:
+def make_config(
+    repo_root: Path,
+    *,
+    require_approval: bool = False,
+    mission_mode: str = MISSION_MODE_SPEC,
+) -> LoopConfig:
     return LoopConfig(
         repo_root=repo_root,
         workspace_dir=repo_root / DEFAULT_WORKSPACE_DIR,
+        mission_mode=mission_mode,
         max_spec_rounds=4,
         max_implementation_rounds=4,
         require_mission_approval=require_approval,
@@ -166,6 +179,24 @@ def test_mission_spec_prompts_prioritize_observable_outcomes_over_specifics() ->
     assert "Avoid exact UI strings, test IDs/selectors" in draft_prompt
     assert "spec avoids unnecessary exact UI strings, test IDs/selectors" in review_prompt
     assert "without prescribing exact test identifiers" in combined
+    assert "use end-to-end Playwright checks against the running app when feasible" in implementation_review_prompt
+    assert "treat that as a test_gap" in implementation_review_prompt
+
+    direct_prompt = build_implementation_review_prompt(
+        task="Refresh the onboarding form.",
+        repo_context="No special rules.",
+        mission_spec="Refresh the onboarding form.",
+        mission_md_path=Path("direct_instruction.txt"),
+        claude_summary="Done",
+        locked_spec=LockedMissionSpec(
+            markdown_text="Refresh the onboarding form.",
+            markdown_sha256="abc123",
+        ),
+        mission_mode=MISSION_MODE_DIRECT,
+    )
+    assert "against the original user request" in direct_prompt
+    assert "Locked direct instruction contents" in direct_prompt
+    assert "decompose it into the minimum coherent set" in direct_prompt
 
 
 def test_review_issue_schema_and_feedback_are_problem_only() -> None:
@@ -428,6 +459,65 @@ def test_user_approval_feedback_restarts_spec_loop(tmp_path: Path) -> None:
     assert "Revised" in artifacts.mission_spec_md.read_text(encoding="utf-8")
 
 
+def test_direct_instruction_mode_skips_spec_and_locks_original_prompt(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    claude = FakeClaude(
+        [
+            "## Accomplished\n- Implemented directly from the prompt\n\n"
+            "## Tests Run\n- pytest -q\n\n"
+            "## Remaining Risks\n- None\n",
+        ]
+    )
+    codex = FakeCodex(
+        [
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Mission complete.",
+                "issues": [],
+                "completed_criteria": ["Original prompt requirements are satisfied."],
+                "remaining_criteria": [],
+                "progress_pct": 100,
+            },
+        ]
+    )
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root, mission_mode=MISSION_MODE_DIRECT),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda mission_spec, path: ApprovalDecision(approved=True),
+        output_stream=output,
+    )
+
+    result = orchestrator.run("Ship the feature exactly as requested.")
+
+    assert result.success is True
+    assert result.mission_mode == MISSION_MODE_DIRECT
+    assert result.mission_spec_rounds == 0
+    assert result.locked_contract_label == "Locked direct instruction"
+    assert result.locked_contract_path == str(artifacts.direct_instruction_txt)
+    assert not artifacts.mission_spec_md.exists()
+    assert artifacts.direct_instruction_txt.exists()
+    assert artifacts.direct_instruction_lock.exists()
+    assert_direct_instruction_locked(artifacts)
+    assert (
+        artifacts.direct_instruction_txt.read_text(encoding="utf-8")
+        == "Ship the feature exactly as requested.\n"
+    )
+    assert "Locked direct instruction" in claude.calls[0][1]
+    assert "direct-instruction mode: skipping mission spec drafting" in output.getvalue()
+    assert "against the original user request" in codex.calls[0][1]
+
+    manifest = json.loads(artifacts.session_manifest_path.read_text(encoding="utf-8"))
+    assert manifest["config"]["mission_mode"] == MISSION_MODE_DIRECT
+    assert manifest["artifacts"]["direct_instruction_txt"] == str(artifacts.direct_instruction_txt)
+    assert manifest["mission_spec_review"]["summary"] == ""
+
+
 def test_lock_manifest_detects_mutation(tmp_path: Path) -> None:
     artifacts = MissionArtifacts.from_workspace(tmp_path / DEFAULT_WORKSPACE_DIR)
     artifacts.ensure_directories()
@@ -447,6 +537,7 @@ def test_lock_manifest_detects_mutation(tmp_path: Path) -> None:
 def test_parse_args_defaults_use_shorter_rounds_and_require_approval() -> None:
     args = parse_args([])
 
+    assert args.mode == MISSION_MODE_SPEC
     assert args.spec_rounds == 3
     assert args.implementation_rounds == 5
     assert args.require_approval is True
@@ -456,6 +547,12 @@ def test_parse_args_can_disable_approval() -> None:
     args = parse_args(["--no-require-approval"])
 
     assert args.require_approval is False
+
+
+def test_parse_args_accepts_direct_instruction_mode() -> None:
+    args = parse_args(["--mode", MISSION_MODE_DIRECT])
+
+    assert args.mode == MISSION_MODE_DIRECT
 
 
 def test_exhausted_spec_rounds_ship_latest_draft_for_approval(tmp_path: Path) -> None:
@@ -1286,7 +1383,8 @@ def test_continue_main_uses_draft_only_session_when_no_lock_exists(
             return SimpleNamespace(
                 success=True,
                 session_dir=str(seeded.session_dir),
-                mission_spec_md=str(seeded.mission_spec_md),
+                locked_contract_label="Locked spec",
+                locked_contract_path=str(seeded.mission_spec_md),
                 report_path=str(seeded.report_path),
             )
 
@@ -1306,6 +1404,71 @@ def test_continue_main_uses_draft_only_session_when_no_lock_exists(
 
     captured = capsys.readouterr()
     assert f"Continuing session {seeded.session_id} with task: Ship from draft" in captured.out
+
+
+def test_continue_main_preserves_direct_instruction_mode_from_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo_root = tmp_path
+    workspace_dir = repo_root / DEFAULT_WORKSPACE_DIR
+    artifacts = MissionArtifacts.from_workspace(
+        workspace_dir,
+        session_id="20260413T181500Z_pid42",
+        started_at="2026-04-13T18:15:00Z",
+    )
+    artifacts.ensure_directories()
+    artifacts.direct_instruction_txt.write_text(
+        "Ship the prompt directly.\n",
+        encoding="utf-8",
+    )
+    artifacts.write_json(
+        artifacts.session_manifest_path,
+        {
+            "session_id": artifacts.session_id,
+            "task": "Ship the prompt directly.",
+            "status": "failed",
+            "started_at": artifacts.started_at,
+            "config": {
+                "mission_mode": MISSION_MODE_DIRECT,
+            },
+        },
+    )
+
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr("audax_core.app.ensure_cli_available", lambda cmd: None)
+
+    calls: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        def continue_session(self, task: str) -> SimpleNamespace:
+            calls["task"] = task
+            return SimpleNamespace(
+                success=True,
+                session_dir=str(artifacts.session_dir),
+                locked_contract_label="Locked direct instruction",
+                locked_contract_path=str(artifacts.direct_instruction_txt),
+                report_path=str(artifacts.report_path),
+            )
+
+    def fake_build_orchestrator(**kwargs) -> FakeOrchestrator:
+        calls["config"] = kwargs["config"]
+        return FakeOrchestrator()
+
+    monkeypatch.setattr("audax_core.app._build_orchestrator", fake_build_orchestrator)
+
+    exit_code = continue_main([])
+
+    assert exit_code == 0
+    assert calls["task"] == "Ship the prompt directly."
+    config = calls["config"]
+    assert isinstance(config, LoopConfig)
+    assert config.mission_mode == MISSION_MODE_DIRECT
+    assert config.max_spec_rounds == 0
+
+    captured = capsys.readouterr()
+    assert "Locked direct instruction:" in captured.out
 
 
 def test_heartbeat_progress_reports_without_streaming_payload() -> None:
@@ -2389,6 +2552,7 @@ def test_render_session_header_card_uses_box_layout() -> None:
     assert "Repo:" in plain
     assert "Workspace:" in plain
     assert "── Execution Budget" in plain
+    assert "Mode: mission-spec" in plain
     assert "Mission approval: required" in plain
     assert "╭" in rendered and "╰" in rendered
 
@@ -2401,6 +2565,7 @@ def test_render_startup_card_uses_box_layout() -> None:
             return True
 
     args = argparse.Namespace(
+        mode=MISSION_MODE_SPEC,
         spec_rounds=6,
         implementation_rounds=20,
         workspace_dir="custom_artifacts",
@@ -2420,6 +2585,7 @@ def test_render_startup_card_uses_box_layout() -> None:
     assert "Enter the mission prompt for Audax." in plain
     assert "Target repository: /tmp/repo" in plain
     assert "── Session Flags" in plain
+    assert "--mode: mission-spec" in plain
     assert "--spec-rounds: 6" in plain
     assert "--subprocess-timeout-seconds: disabled" in plain
     assert "--require-approval/--no-require-approval: enabled" in plain
@@ -2527,6 +2693,7 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
             return True
 
     monkeypatch.chdir(Path("/tmp"))
+    monkeypatch.setenv("TERM", "xterm-256color")
     stdout = FakeTTY()
     monkeypatch.setattr("sys.stdout", stdout)
     monkeypatch.setattr("sys.stdin", io.StringIO("build the thing"))
@@ -2534,6 +2701,7 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
     task = read_task(
         argparse.Namespace(
             task=[],
+            mode=MISSION_MODE_SPEC,
             spec_rounds=7,
             implementation_rounds=12,
             workspace_dir="session_artifacts",
@@ -2552,6 +2720,7 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
     assert "Enter the mission prompt for Audax." in plain
     assert "Press Ctrl-D when you are done." in plain
     assert "Target repository:" in plain
+    assert "--mode: mission-spec" in plain
     assert "--implementation-rounds: 12" in plain
     assert "--claude-cmd: claude-enterprise" in plain
     assert "--require-approval/--no-require-approval: enabled" in plain
@@ -2559,6 +2728,17 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
     assert "reasoning effort: max" in plain
     assert "approvals/sandbox: dangerously-bypass-approvals-and-sandbox" in plain
     assert "╭" in rendered and "╰" in rendered
+
+
+def test_input_box_style_map_uses_shaded_background() -> None:
+    style_map = build_input_box_style_map()
+
+    assert style_map[""].startswith("bg:#232a31")
+    assert style_map["prompt"].startswith("bg:#232a31")
+    assert style_map["input"].startswith("bg:#232a31")
+    assert style_map["continuation"].startswith("bg:#232a31")
+    assert input_box_prompt_prefix() == "  > "
+    assert input_box_continuation_prefix() == "    "
 
 
 def test_user_approval_feedback_survives_subsequent_codex_rejection(tmp_path: Path) -> None:

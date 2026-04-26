@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import textwrap
 
-from .models import LockedMissionSpec
+from .models import LockedMissionSpec, MISSION_MODE_DIRECT, MISSION_MODE_SPEC
 
 
 def build_mission_spec_prompt(
@@ -123,6 +123,7 @@ def build_implementation_prompt(
     mission_md_path: Path,
     locked_spec: LockedMissionSpec,
     review_feedback: str,
+    mission_mode: str = MISSION_MODE_SPEC,
 ) -> str:
     """Construct the Claude prompt for an implementation round."""
     feedback_block = (
@@ -130,32 +131,60 @@ def build_implementation_prompt(
         if not review_feedback.strip()
         else review_feedback
     )
+    if mission_mode == MISSION_MODE_DIRECT:
+        intro = "You are implementing a locked direct instruction in the current repository."
+        locked_heading = "Locked direct instruction"
+        lock_notice = (
+            "The original user request is the locked mission contract. "
+            "Do not modify direct_instruction.txt or direct_instruction.lock.json."
+        )
+        contents_heading = "Locked direct instruction contents"
+        implementation_rule = (
+            "Implement the original user request directly in the repository."
+        )
+        testing_rule = (
+            "Implement automated tests for deterministic, testable outcomes that "
+            "show the original user request is satisfied."
+        )
+    else:
+        intro = "You are implementing an immutable mission in the current repository."
+        locked_heading = "Locked mission spec"
+        lock_notice = (
+            "The mission spec is locked. "
+            "Do not modify mission_spec.md or mission_spec.lock.json."
+        )
+        contents_heading = "Locked mission_spec.md contents"
+        implementation_rule = "Implement all remaining mission requirements directly in the repository."
+        testing_rule = (
+            "Implement automated tests for mission success criteria that can be "
+            "covered with deterministic checks."
+        )
     return textwrap.dedent(
         f"""
-        You are implementing an immutable mission in the current repository.
+        {intro}
 
         Original user request:
         {task}
 
-        Locked mission spec:
-        - Markdown path: {mission_md_path}
-        - Mission markdown sha256: {locked_spec.markdown_sha256}
+        {locked_heading}:
+        - Text path: {mission_md_path}
+        - Locked text sha256: {locked_spec.markdown_sha256}
 
-        The mission spec is locked. Do not modify mission_spec.md or mission_spec.lock.json.
+        {lock_notice}
 
         Repo policy context:
         {repo_context}
 
-        Locked mission_spec.md contents:
+        {contents_heading}:
         {mission_spec}
 
         Reviewer feedback to address:
         {feedback_block}
 
         Instructions:
-        - Implement all remaining mission requirements directly in the repository.
+        - {implementation_rule}
         - Respect repo rules such as tests, documentation, and synchronization requirements.
-        - Implement automated tests for mission success criteria that can be covered with deterministic checks.
+        - {testing_rule}
         - Run the relevant tests or checks when possible.
         - Version control: if the repo is a git repository, commit logical
           chunks of work as you make them with clear, descriptive commit
@@ -180,24 +209,72 @@ def build_implementation_review_prompt(
     mission_md_path: Path,
     claude_summary: str,
     locked_spec: LockedMissionSpec,
+    mission_mode: str = MISSION_MODE_SPEC,
 ) -> str:
     """Construct the Codex review prompt for the current repository state."""
+    if mission_mode == MISSION_MODE_DIRECT:
+        review_intro = (
+            "Review the current repository state against the original user request "
+            "and repo policy context."
+        )
+        locked_heading = "Locked direct instruction"
+        contents_heading = "Locked direct instruction contents"
+        progress_block = textwrap.dedent(
+            """
+            Progress reporting (required fields):
+            - completed_criteria: list of short human-readable descriptions of
+              each distinct user-visible or repository-significant requirement
+              from the original request that is currently met.
+            - remaining_criteria: list of short human-readable descriptions of
+              each distinct requirement from the original request that is NOT
+              yet met.
+            - progress_pct: integer 0-100 estimating overall mission
+              completion, grounded in the completed vs remaining split. Use the
+              exact ratio when possible (e.g. 3 of 5 criteria met -> 60).
+            - When the original request does not enumerate discrete criteria,
+              decompose it into the minimum coherent set needed to judge
+              completion, then cover each decomposed criterion exactly once
+              across completed_criteria and remaining_criteria.
+            """
+        ).strip()
+    else:
+        review_intro = (
+            "Review the current repository state against the locked mission spec "
+            "and repo policy context."
+        )
+        locked_heading = "Locked mission spec"
+        contents_heading = "Locked mission_spec.md contents"
+        progress_block = textwrap.dedent(
+            """
+            Progress reporting (required fields):
+            - completed_criteria: list of short human-readable descriptions of
+              each mission success criterion that is currently met.
+            - remaining_criteria: list of short human-readable descriptions of
+              each mission success criterion that is NOT yet met.
+            - progress_pct: integer 0-100 estimating overall mission completion,
+              grounded in the completed vs remaining split. Use the exact ratio
+              when possible (e.g. 3 of 5 criteria met -> 60).
+            - Draw completed_criteria and remaining_criteria directly from the
+              mission spec's Mission Success Criteria section; together they
+              should cover every criterion exactly once.
+            """
+        ).strip()
     return textwrap.dedent(
         f"""
-        Review the current repository state against the locked mission spec and repo policy context.
+        {review_intro}
         Inspect the repository directly. Do not rely only on Claude's summary.
 
         Original user request:
         {task}
 
-        Locked mission spec:
-        - Markdown path: {mission_md_path}
-        - Mission markdown sha256: {locked_spec.markdown_sha256}
+        {locked_heading}:
+        - Text path: {mission_md_path}
+        - Locked text sha256: {locked_spec.markdown_sha256}
 
         Repo policy context:
         {repo_context}
 
-        Locked mission_spec.md contents:
+        {contents_heading}:
         {mission_spec}
 
         Claude implementation summary:
@@ -210,20 +287,12 @@ def build_implementation_review_prompt(
         - has_issues is true if there is any bug, missing requirement, repo policy violation, or testing gap.
         - Use issue categories such as bug, missing_requirement, repo_policy, or test_gap.
         - Missing automated tests for deterministic, testable mission outcomes is a test_gap.
+        - When the mission touches a web app or browser UI, use end-to-end Playwright checks against the running app when feasible; do not rely only on static inspection or unit/integration test output for critical user flows.
+        - If the repo appears to ship a web app and feasible Playwright validation for critical user flows was not performed, treat that as a test_gap unless there is strong repository evidence that equivalent browser-level coverage already exists.
         - If the implementation is clean but incomplete, still report issues and set mission_accomplished to false.
         - Issues must describe only the problem, evidence, severity, and why it blocks completion.
         - Do not prescribe fixes or implementation strategy; the implementer owns the solution.
 
-        Progress reporting (required fields):
-        - completed_criteria: list of short human-readable descriptions of
-          each mission success criterion that is currently met.
-        - remaining_criteria: list of short human-readable descriptions of
-          each mission success criterion that is NOT yet met.
-        - progress_pct: integer 0-100 estimating overall mission completion,
-          grounded in the completed vs remaining split. Use the exact ratio
-          when possible (e.g. 3 of 5 criteria met -> 60).
-        - Draw completed_criteria and remaining_criteria directly from the
-          mission spec's Mission Success Criteria section; together they
-          should cover every criterion exactly once.
+        {progress_block}
         """
     ).strip()

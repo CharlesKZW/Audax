@@ -18,6 +18,11 @@ phases:
      -> Codex reviews the live repository state
      -> repeat until success or round limit
 
+The default ``mission-spec`` mode follows the full drafting path above.
+``direct-instruction`` mode skips the drafting and approval stages, locks the
+original prompt as ``direct_instruction.txt``, and then runs the same
+implementation/review loop against that prompt directly.
+
 Mission Drafting
 ----------------
 
@@ -47,6 +52,22 @@ feeds them into the next Claude round. If the drafting budget is exhausted
 before Codex approves, Audax ships the latest draft for a final human decision
 and surfaces the latest reject message.
 
+Direct Instruction Mode
+-----------------------
+
+When ``--mode direct-instruction`` is selected, Audax does not draft
+``mission_spec.md`` at all. Instead it:
+
+* writes the original user request to ``direct_instruction.txt``,
+* locks that text with ``direct_instruction.lock.json``, and
+* asks Claude to implement against the original prompt directly.
+
+Codex still reviews the live repository state through the same structured JSON
+workflow, but it compares the implementation against the original request
+rather than a drafted mission spec. Progress reporting in this mode is derived
+from the request itself, so Codex decomposes the prompt into the minimum
+coherent set of criteria needed to judge completion.
+
 Mission Approval And Locking
 ----------------------------
 
@@ -73,11 +94,12 @@ markdown changes unexpectedly, the run fails immediately.
 Implementation And Review
 -------------------------
 
-Implementation rounds keep Claude focused on the immutable mission by passing:
+Implementation rounds keep Claude focused on the immutable mission contract by
+passing:
 
-* the locked markdown contents,
-* the markdown path,
-* the SHA-256 digest of the locked markdown,
+* the locked contract contents,
+* the contract text path,
+* the SHA-256 digest of the locked text,
 * repository policy context, and
 * any structured feedback from the previous Codex review.
 
@@ -92,6 +114,12 @@ with:
 * ``remaining_criteria`` — mission success criteria still unmet.
 * ``progress_pct`` — integer 0-100 grounded in the completed vs remaining
   split.
+
+When the mission affects a web app or browser UI, the reviewer is also
+expected to exercise critical user flows with end-to-end Playwright checks
+against a running app when feasible. Failing to do that, absent equivalent
+browser-level evidence already in the repository, should be treated as a test
+gap rather than a clean sign-off.
 
 The loop only succeeds when the mission is fully accomplished and no issues
 remain.
@@ -144,12 +172,13 @@ Resuming After Disruption
 -------------------------
 
 A session that was killed mid-implementation is recoverable as long as its
-mission spec was already locked. Run ``python audax.py continue`` to pick up
-the most recent incomplete session, or ``python audax.py continue
+mission contract was already locked. Run ``python audax.py continue`` to pick
+up the most recent incomplete session, or ``python audax.py continue
 <session_id>`` to target a specific one. Resume skips drafting and approval
-entirely: the existing ``mission_spec.md`` and ``mission_spec.lock.json`` are
-rehydrated, the SHA-256 digest is re-verified, and the implementation loop
-restarts. The last Codex implementation review from the prior session is
-also rehydrated as the first resumed round's reviewer feedback, so the
-unresolved objections flow forward as structured input rather than being
-rediscovered from repo state. See :doc:`cli-reference` for all resume flags.
+entirely: the existing locked contract file (``mission_spec.md`` or
+``direct_instruction.txt``) and its lock manifest are rehydrated, the SHA-256
+digest is re-verified, and the implementation loop restarts. The last Codex
+implementation review from the prior session is also rehydrated as the first
+resumed round's reviewer feedback, so the unresolved objections flow forward
+as structured input rather than being rediscovered from repo state. See
+:doc:`cli-reference` for all resume flags.
