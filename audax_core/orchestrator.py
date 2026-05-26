@@ -338,13 +338,19 @@ class ReviewLoopOrchestrator:
                 round=round_num,
                 path=prompt_path,
             )
-            current_spec, drafter_backend = self._call_text_backend(
-                prompt,
-                label=f"mission spec drafting round {round_num}",
-                role="mission_spec",
-                round_num=round_num,
-                candidates=self.implementers,
-            )
+            try:
+                current_spec, drafter_backend = self._call_text_backend(
+                    prompt,
+                    label=f"mission spec drafting round {round_num}",
+                    role="mission_spec",
+                    round_num=round_num,
+                    candidates=self.implementers,
+                    on_text_delta=self._make_stream_callback(
+                        f"mission spec drafting round {round_num}"
+                    ),
+                )
+            finally:
+                self._finalize_streaming()
 
             self.artifacts.mission_spec_md.write_text(current_spec + "\n", encoding="utf-8")
             output_path = self.artifacts.output_path(
@@ -489,15 +495,19 @@ class ReviewLoopOrchestrator:
                 round=round_num,
                 path=implementation_prompt_path,
             )
-            implementation_summary, implementer_backend = self._call_text_backend(
-                implementation_prompt,
-                label=f"implementation round {round_num}",
-                role="implementation",
-                round_num=round_num,
-                candidates=self.implementers,
-                on_text_delta=self._stream_implementer_text,
-            )
-            self._finalize_streaming()
+            try:
+                implementation_summary, implementer_backend = self._call_text_backend(
+                    implementation_prompt,
+                    label=f"implementation round {round_num}",
+                    role="implementation",
+                    round_num=round_num,
+                    candidates=self.implementers,
+                    on_text_delta=self._make_stream_callback(
+                        f"implementation round {round_num}"
+                    ),
+                )
+            finally:
+                self._finalize_streaming()
 
             implementation_output_path = self.artifacts.output_path(
                 f"implementation_{implementer_backend}", round_num, "md",
@@ -765,17 +775,22 @@ class ReviewLoopOrchestrator:
         self.output_stream.write(f"{message}\n")
         self.output_stream.flush()
 
-    def _stream_implementer_text(self, text: str) -> None:
-        """Stream a chunk of implementer text to the output stream.
+    def _make_stream_callback(self, label: str) -> Callable[[str], None]:
+        """Return a streaming callback labelled for the active agent phase."""
+        def callback(text: str) -> None:
+            self._stream_agent_text(text, label=label)
 
-        Used as the ``on_text_delta`` callback when Claude is the implementer
-        so the user can see Claude's partial output and tool calls live. The
-        first chunk emits a separator header so the streamed content is
-        visually distinct from Audax's own status lines.
-        """
+        return callback
+
+    def _stream_agent_text(self, text: str, *, label: str) -> None:
+        """Stream a chunk of agent text to the output stream."""
         if not self._streaming_active:
             self._streaming_active = True
-            self.output_stream.write("\n  ── Claude live output ─────────────────────\n")
+            self.output_stream.write(
+                "\n"
+                f"  ── Claude live work log: {label} ─────────────────────\n"
+                "  Ctrl-C stops the current Audax run; use `continue` to resume from a locked mission.\n"
+            )
         self.output_stream.write(text)
         self.output_stream.flush()
 

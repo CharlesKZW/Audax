@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import signal
+import shlex
 import shutil
 import sys
 
@@ -49,6 +50,7 @@ from .orchestrator import ReviewLoopOrchestrator
 from .progress import QuietProcessRunner
 from .ui import (
     read_task_interactive,
+    render_info_card,
     render_startup_card,
     style_disabled,
     style_enabled,
@@ -193,13 +195,39 @@ def _describe_optional_setting(value: str | None) -> str:
     return value
 
 
+class StartupExitRequested(Exception):
+    """Raised when the user exits from the interactive startup prompt."""
+
+
 def build_startup_card_info_lines(
     args: argparse.Namespace,
     *,
     repo_root: Path | None = None,
     interactive: bool = False,
 ) -> list[str]:
-    """Build the rich startup-card summary shown before stdin task entry."""
+    """Build the compact startup-card summary shown before stdin task entry."""
+    repo_root = repo_root or Path.cwd()
+    submit_hint = (
+        "Press **Enter** to submit · **Option+Enter** inserts a new line."
+        if interactive
+        else "Press **Ctrl-D** when you are done."
+    )
+    if interactive:
+        submit_hint += " Type **/agents**, **/models**, or **/flags** for details."
+
+    return [
+        "Enter the **mission prompt** for Audax.",
+        submit_hint,
+        f"Target repository: `{repo_root}`",
+    ]
+
+
+def build_startup_flag_info_lines(
+    args: argparse.Namespace,
+    *,
+    repo_root: Path | None = None,
+) -> list[str]:
+    """Build the session flag details shown by the interactive /flags command."""
     color = os.environ.get("NO_COLOR") is None
     repo_root = repo_root or Path.cwd()
     mission_mode = getattr(args, "mode", DEFAULT_MISSION_MODE)
@@ -216,7 +244,6 @@ def build_startup_card_info_lines(
     def toggle(flag: bool) -> str:
         return style_enabled(color=color) if flag else style_disabled(color=color)
 
-    mode_label = mission_mode
     spec_rounds_value = (
         "skipped in direct-instruction mode"
         if mission_mode == MISSION_MODE_DIRECT
@@ -228,30 +255,9 @@ def build_startup_card_info_lines(
         else toggle(getattr(args, "require_approval", True))
     )
 
-    submit_hint = (
-        "Press **Enter** to submit · **Alt+Enter** inserts a new line."
-        if interactive
-        else "Press **Ctrl-D** when you are done."
-    )
-
-    claude_permissions = (
-        style_warning("dangerously-skip-permissions", color=color)
-        if CLAUDE_SKIP_PERMISSIONS
-        else "CLI default"
-    )
-    codex_sandbox = (
-        style_warning("dangerously-bypass-approvals-and-sandbox", color=color)
-        if CODEX_BYPASS_APPROVALS_AND_SANDBOX
-        else "CLI default"
-    )
-
     return [
-        "Enter the **mission prompt** for Audax.",
-        submit_hint,
-        f"Target repository: `{repo_root}`",
-        "",
         style_section_header("Session Flags", color=color),
-        f"  **--mode**: {mode_label}",
+        f"  **--mode**: {mission_mode}",
         f"  **--spec-rounds**: {spec_rounds_value}",
         (
             "  **--implementation-rounds**: "
@@ -277,8 +283,26 @@ def build_startup_card_info_lines(
             "  **--session-branch/--no-session-branch**: "
             f"{toggle(getattr(args, 'session_branch', False))}"
         ),
-        "",
+    ]
+
+
+def build_startup_agent_info_lines(args: argparse.Namespace) -> list[str]:
+    """Build Claude/Codex runtime details shown by /agents and /models."""
+    color = os.environ.get("NO_COLOR") is None
+    claude_permissions = (
+        style_warning("dangerously-skip-permissions", color=color)
+        if CLAUDE_SKIP_PERMISSIONS
+        else "CLI default"
+    )
+    codex_sandbox = (
+        style_warning("dangerously-bypass-approvals-and-sandbox", color=color)
+        if CODEX_BYPASS_APPROVALS_AND_SANDBOX
+        else "CLI default"
+    )
+
+    return [
         style_section_header("Claude Runtime", color=color),
+        f"  **command**: `{getattr(args, 'claude_cmd', CLAUDE_CMD)}`",
         f"  **model**: {_describe_optional_setting(CLAUDE_MODEL)}",
         f"  **reasoning effort**: {_describe_optional_setting(CLAUDE_REASONING_EFFORT)}",
         f"  **permissions**: {claude_permissions}",
@@ -290,11 +314,315 @@ def build_startup_card_info_lines(
         ),
         "",
         style_section_header("Codex Runtime", color=color),
+        f"  **command**: `{getattr(args, 'codex_cmd', CODEX_CMD)}`",
         f"  **model**: {CODEX_MODEL}",
         f"  **reasoning effort**: {CODEX_REASONING_EFFORT}",
         f"  **approvals/sandbox**: {codex_sandbox}",
         "  **output**: JSON schema validated into a temporary output file",
     ]
+
+
+def build_startup_slash_command_completions() -> dict[str, str]:
+    """Return startup slash commands and short dropdown descriptions."""
+    return {
+        "/help": "show startup commands",
+        "/agents": "show Claude and Codex runtime details",
+        "/models": "alias for /agents",
+        "/flags": "show current session flags and paths",
+        "/mode": "set or toggle direct-instruction vs mission-spec",
+        "/spec-rounds": "set mission-spec drafting rounds",
+        "/spec": "alias for /spec-rounds",
+        "/implementation-rounds": "set implementation/review rounds",
+        "/impl-rounds": "alias for /implementation-rounds",
+        "/input-rounds": "alias for /implementation-rounds",
+        "/require-approval": "toggle or set mission approval",
+        "/approval": "alias for /require-approval",
+        "/auto-commit": "toggle or set auto-commit",
+        "/commit": "alias for /auto-commit",
+        "/session-branch": "toggle or set session branch creation",
+        "/branch": "alias for /session-branch",
+        "/exit": "close Audax without starting a mission",
+        "/quit": "alias for /exit",
+    }
+
+
+def build_startup_slash_command_handler(
+    args: argparse.Namespace,
+    *,
+    repo_root: Path | None = None,
+    stream: object | None = None,
+):
+    """Build the interactive slash-command handler used before mission entry."""
+    output_stream = stream if hasattr(stream, "write") else sys.stdout
+    repo_root = repo_root or Path.cwd()
+
+    def render_flags(message: str = "") -> str:
+        lines = build_startup_flag_info_lines(args, repo_root=repo_root)
+        if message:
+            lines = [message, "", *lines]
+        return render_info_card(
+            output_stream,
+            title="AUDAX FLAGS",
+            info_lines=lines,
+        )
+
+    def render_agents() -> str:
+        return render_info_card(
+            output_stream,
+            title="AUDAX AGENTS",
+            info_lines=build_startup_agent_info_lines(args),
+        )
+
+    def render_help() -> str:
+        return render_info_card(
+            output_stream,
+            title="AUDAX COMMANDS",
+            info_lines=[
+                "Type a command and press **Enter**.",
+                "  **/agents** or **/models**: show Claude and Codex runtime details.",
+                "  **/flags**: show current session flags and paths.",
+                "  **/mode [direct|mission-spec]**: set or toggle mission mode.",
+                "  **/spec-rounds <n>**: set mission-spec drafting rounds.",
+                "  **/implementation-rounds <n>**: set implementation/review rounds.",
+                "  **/require-approval [on|off]**: set or toggle mission approval.",
+                "  **/auto-commit [on|off]**: set or toggle auto-commit.",
+                "  **/session-branch [on|off]**: set or toggle session branch creation.",
+                "  **/exit** or **/quit**: close Audax without starting a mission.",
+            ],
+        )
+
+    def handler(raw_command: str) -> str:
+        try:
+            tokens = shlex.split(raw_command)
+        except ValueError as exc:
+            return _render_startup_command_error(output_stream, f"Could not parse command: {exc}")
+        if not tokens:
+            return render_help()
+
+        command = tokens[0].lower()
+        values = tokens[1:]
+
+        if command in {"/exit", "/quit"}:
+            raise StartupExitRequested
+        if command in {"/", "/help"}:
+            return render_help()
+        if command in {"/agents", "/models"}:
+            return render_agents()
+        if command == "/flags":
+            return render_flags()
+        if command == "/mode":
+            return _handle_mode_command(args, values, render_flags, output_stream)
+        if command in {"/spec-rounds", "/spec_rounds", "/spec"}:
+            value = _extract_round_value(command, values, expected_word="rounds")
+            return _handle_positive_int_command(
+                args,
+                attr="spec_rounds",
+                flag_name="--spec-rounds",
+                value=value,
+                render_flags=render_flags,
+                output_stream=output_stream,
+            )
+        if command in {
+            "/implementation-rounds",
+            "/implementation_rounds",
+            "/impl-rounds",
+            "/impl_rounds",
+            "/implementation",
+            "/input-rounds",
+            "/input_rounds",
+            "/input",
+        }:
+            value = _extract_round_value(command, values, expected_word="rounds")
+            return _handle_positive_int_command(
+                args,
+                attr="implementation_rounds",
+                flag_name="--implementation-rounds",
+                value=value,
+                render_flags=render_flags,
+                output_stream=output_stream,
+            )
+        if command in {
+            "/require-approval",
+            "/require_approval",
+            "/approval",
+            "/require",
+        }:
+            bool_values = _extract_bool_values(command, values, expected_word="approval")
+            return _handle_bool_command(
+                args,
+                attr="require_approval",
+                flag_name="--require-approval",
+                values=bool_values,
+                render_flags=render_flags,
+                output_stream=output_stream,
+            )
+        if command in {
+            "/auto-commit",
+            "/auto_commit",
+            "/commit",
+            "/auto",
+        }:
+            bool_values = _extract_bool_values(command, values, expected_word="commit")
+            return _handle_bool_command(
+                args,
+                attr="auto_commit",
+                flag_name="--auto-commit",
+                values=bool_values,
+                render_flags=render_flags,
+                output_stream=output_stream,
+            )
+        if command in {
+            "/session-branch",
+            "/session_branch",
+            "/branch",
+            "/session",
+        }:
+            bool_values = _extract_bool_values(command, values, expected_word="branch")
+            return _handle_bool_command(
+                args,
+                attr="session_branch",
+                flag_name="--session-branch",
+                values=bool_values,
+                render_flags=render_flags,
+                output_stream=output_stream,
+            )
+
+        return _render_startup_command_error(
+            output_stream,
+            f"Unknown Audax command: {command}",
+            hint="Type /help to list available commands.",
+        )
+
+    return handler
+
+
+def _extract_round_value(command: str, values: list[str], *, expected_word: str) -> str | None:
+    """Support both /spec-rounds 4 and /spec rounds 4 spellings."""
+    if command in {"/spec", "/implementation", "/input"} and values[:1] == [expected_word]:
+        values = values[1:]
+    return values[0] if values else None
+
+
+def _extract_bool_values(command: str, values: list[str], *, expected_word: str) -> list[str]:
+    """Support both /auto-commit off and /auto commit off spellings."""
+    if command in {"/require", "/auto", "/session"} and values[:1] == [expected_word]:
+        return values[1:]
+    return values
+
+
+def _handle_mode_command(
+    args: argparse.Namespace,
+    values: list[str],
+    render_flags,
+    output_stream: object,
+) -> str:
+    if not values:
+        current = getattr(args, "mode", DEFAULT_MISSION_MODE)
+        next_mode = (
+            MISSION_MODE_SPEC
+            if current == MISSION_MODE_DIRECT
+            else MISSION_MODE_DIRECT
+        )
+    else:
+        requested = values[0].strip().lower()
+        aliases = {
+            "direct": MISSION_MODE_DIRECT,
+            "direct-instruction": MISSION_MODE_DIRECT,
+            "instruction": MISSION_MODE_DIRECT,
+            "mission": MISSION_MODE_SPEC,
+            "mission-spec": MISSION_MODE_SPEC,
+            "spec": MISSION_MODE_SPEC,
+        }
+        next_mode = aliases.get(requested)
+        if next_mode is None:
+            return _render_startup_command_error(
+                output_stream,
+                f"Unsupported mode: {values[0]}",
+                hint="Use /mode direct or /mode mission-spec.",
+            )
+    setattr(args, "mode", next_mode)
+    return render_flags(f"Updated --mode to {next_mode}.")
+
+
+def _handle_positive_int_command(
+    args: argparse.Namespace,
+    *,
+    attr: str,
+    flag_name: str,
+    value: str | None,
+    render_flags,
+    output_stream: object,
+) -> str:
+    if value is None:
+        return _render_startup_command_error(
+            output_stream,
+            f"Missing value for {flag_name}.",
+            hint=f"Use /{flag_name.removeprefix('--')} 5.",
+        )
+    try:
+        parsed = int(value)
+    except ValueError:
+        return _render_startup_command_error(
+            output_stream,
+            f"{flag_name} must be a positive integer.",
+        )
+    if parsed <= 0:
+        return _render_startup_command_error(
+            output_stream,
+            f"{flag_name} must be a positive integer.",
+        )
+    setattr(args, attr, parsed)
+    return render_flags(f"Updated {flag_name} to {parsed}.")
+
+
+def _handle_bool_command(
+    args: argparse.Namespace,
+    *,
+    attr: str,
+    flag_name: str,
+    values: list[str],
+    render_flags,
+    output_stream: object,
+) -> str:
+    if not values:
+        next_value = not bool(getattr(args, attr, False))
+    else:
+        parsed = _parse_boolish(values[0])
+        if parsed is None:
+            return _render_startup_command_error(
+                output_stream,
+                f"Unsupported value for {flag_name}: {values[0]}",
+                hint=f"Use /{flag_name.removeprefix('--')} on or /{flag_name.removeprefix('--')} off.",
+            )
+        next_value = parsed
+    setattr(args, attr, next_value)
+    label = "enabled" if next_value else "disabled"
+    return render_flags(f"Updated {flag_name} to {label}.")
+
+
+def _parse_boolish(value: str) -> bool | None:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on", "enable", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", "disable", "disabled"}:
+        return False
+    return None
+
+
+def _render_startup_command_error(
+    stream: object,
+    message: str,
+    *,
+    hint: str = "",
+) -> str:
+    lines = [message]
+    if hint:
+        lines.append(hint)
+    return render_info_card(
+        stream if hasattr(stream, "write") else sys.stdout,
+        title="AUDAX COMMAND",
+        info_lines=lines,
+    )
 
 
 def read_task(args: argparse.Namespace) -> str:
@@ -315,7 +643,14 @@ def read_task(args: argparse.Namespace) -> str:
         print("Enter the mission prompt for Audax.")
         print("Press Ctrl-D when you are done.\n")
     if interactive:
-        return read_task_interactive().strip()
+        return read_task_interactive(
+            slash_command_completions=build_startup_slash_command_completions(),
+            slash_command_handler=build_startup_slash_command_handler(
+                args,
+                stream=sys.stdout,
+            ),
+            stream=sys.stdout,
+        ).strip()
     return sys.stdin.read().strip()
 
 
@@ -423,6 +758,9 @@ def run_main(argv: list[str]) -> int:
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
         return 130
+    except StartupExitRequested:
+        print("Audax exited.")
+        return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

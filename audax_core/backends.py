@@ -100,6 +100,17 @@ def make_claude_stream_chunk_handler(
     completed line, and forwards user-visible deltas to ``on_text``.
     """
     line_buffer = [""]
+    active_tool: dict[str, str] = {}
+
+    def flush_tool_summary() -> None:
+        if not active_tool:
+            return
+        name = active_tool.get("name", "tool")
+        partial_json = active_tool.get("partial_json", "")
+        summary = summarize_claude_tool_use(name, partial_json)
+        if summary:
+            on_text(summary)
+        active_tool.clear()
 
     def handler(chunk: str) -> None:
         line_buffer[0] += chunk
@@ -113,11 +124,81 @@ def make_claude_stream_chunk_handler(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            inner = event.get("event") or {}
+            if (
+                event.get("type") == "stream_event"
+                and inner.get("type") == "content_block_start"
+            ):
+                block = inner.get("content_block") or {}
+                if block.get("type") == "tool_use":
+                    active_tool.clear()
+                    active_tool["name"] = str(block.get("name") or "tool")
+                    active_tool["partial_json"] = ""
+            elif (
+                event.get("type") == "stream_event"
+                and inner.get("type") == "content_block_delta"
+            ):
+                delta = inner.get("delta") or {}
+                if active_tool and delta.get("type") == "input_json_delta":
+                    active_tool["partial_json"] += str(delta.get("partial_json") or "")
+            elif (
+                event.get("type") == "stream_event"
+                and inner.get("type") == "content_block_stop"
+            ):
+                flush_tool_summary()
+
             text = extract_claude_stream_event_text(event)
             if text:
                 on_text(text)
 
     return handler
+
+
+def summarize_claude_tool_use(name: str, partial_json: str) -> str:
+    """Render a concise, user-visible summary for a completed Claude tool call."""
+    if not partial_json.strip():
+        return ""
+    try:
+        payload = json.loads(partial_json)
+    except json.JSONDecodeError:
+        preview = _compact_tool_preview(partial_json)
+        return f": {preview}" if preview else ""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    value = _first_tool_value(
+        payload,
+        (
+            "command",
+            "file_path",
+            "path",
+            "pattern",
+            "query",
+            "url",
+            "description",
+            "prompt",
+        ),
+    )
+    if not value:
+        return ""
+    return f": {_compact_tool_preview(value)}"
+
+
+def _first_tool_value(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _compact_tool_preview(value: str, *, limit: int = 120) -> str:
+    preview = " ".join(value.split())
+    if len(preview) <= limit:
+        return preview
+    return preview[: limit - 1].rstrip() + "..."
 
 
 def _wrap_prompt_with_schema(prompt: str, schema: dict[str, Any]) -> str:
@@ -189,8 +270,9 @@ class ClaudeCLI:
         """Execute Claude with a plain-text prompt and return its rendered text.
 
         When ``on_text_delta`` is provided, Claude's partial assistant text and
-        tool-use indicators stream to the callback as they arrive; the spinner
-        heartbeat is suppressed so the streamed output stays clean.
+        tool-use indicators stream to the callback as they arrive. Heartbeats
+        remain enabled as line-based updates so long-running silent tool calls
+        still show signs of life without overwriting streamed text.
         """
         cmd = [
             self.cmd,
@@ -224,7 +306,7 @@ class ClaudeCLI:
             cwd=self.repo_root,
             stdin_text=prompt,
             on_chunk=on_chunk,
-            disable_heartbeat=on_chunk is not None,
+            disable_heartbeat=False,
         )
         return parse_claude_stream_output(output)
 

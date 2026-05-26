@@ -183,7 +183,8 @@ constants at the top of `audax_core/backends.py` if you want cheaper runs.
 Audax does **not** call the Anthropic or OpenAI APIs directly. It shells out
 to the `claude` and `codex` binaries and expects them to be installed,
 authenticated, and on your `PATH`. The exact flags Audax passes are visible
-in `audax_core/backends.py` and on the startup card printed before each run.
+in `audax_core/backends.py`; when entering an interactive mission prompt, type
+`/agents` or `/models` to inspect the active agent runtime details.
 
 ### 🧪 New and unverified
 
@@ -201,8 +202,13 @@ Run the tool and type the mission prompt into stdin:
 python audax.py
 ```
 
-Audax prints a startup card summarizing the active configuration, waits for
-your prompt, and starts after you press `Ctrl-D`.
+Audax prints a compact startup card, waits for your prompt, and starts after
+you press `Ctrl-D`. In an interactive terminal, type `/flags` to inspect or
+change session settings, `/agents` or `/models` to inspect agent runtime
+details, and `/help` to list startup commands before submitting the mission.
+Startup commands include `/mode [direct|mission-spec]`, `/spec-rounds <n>`,
+`/implementation-rounds <n>`, `/require-approval [on|off]`,
+`/auto-commit [on|off]`, `/session-branch [on|off]`, and `/exit`.
 
 You can also pass the mission request as arguments:
 

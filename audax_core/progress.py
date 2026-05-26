@@ -25,6 +25,7 @@ class HeartbeatProgress:
         interval_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
         stream: TextIO | None = None,
         clock: Callable[[], float] = time.monotonic,
+        inline_updates: bool | None = None,
     ) -> None:
         self.label = label
         self.interval_seconds = max(0.0, interval_seconds)
@@ -34,7 +35,11 @@ class HeartbeatProgress:
         self.last_update: float | None = None
         self._spinner_index = 0
         self._last_inline_width = 0
-        self._inline_updates = self._supports_inline_updates(self.stream)
+        self._inline_updates = (
+            self._supports_inline_updates(self.stream)
+            if inline_updates is None
+            else inline_updates
+        )
 
     @property
     def uses_inline_updates(self) -> bool:
@@ -186,6 +191,7 @@ class QuietProcessRunner:
                 label=label,
                 interval_seconds=self.heartbeat_seconds,
                 stream=self.progress_stream,
+                inline_updates=False if on_chunk is not None else None,
             )
             progress.start()
         started_at = time.monotonic()

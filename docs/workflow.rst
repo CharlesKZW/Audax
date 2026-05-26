@@ -117,6 +117,14 @@ gap rather than a clean sign-off.
 The loop only succeeds when the mission is fully accomplished and no issues
 remain.
 
+Claude text phases stream a live work log while they run, including partial
+assistant text and concise tool-use summaries. Audax also keeps heartbeat
+updates active during streamed subprocesses, so a long-running command still
+shows signs of life. Because the current backend invokes Claude in one-shot
+``-p`` mode, live steering is interrupt-and-resume rather than in-band prompt
+injection: press ``Ctrl-C`` to stop the run, then use ``audax continue`` when a
+locked mission is available.
+
 After each implementation round, Audax prints a three-box **Round Report** to
 the terminal:
 

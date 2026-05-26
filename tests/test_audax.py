@@ -32,9 +32,13 @@ from audax_core.backends import (
     extract_claude_stream_event_text,
     make_claude_stream_chunk_handler,
     parse_claude_stream_output,
+    summarize_claude_tool_use,
 )
 from audax_core.app import (
+    StartupExitRequested,
     build_startup_card_info_lines,
+    build_startup_slash_command_completions,
+    build_startup_slash_command_handler,
     continue_main,
     main,
     parse_args,
@@ -65,12 +69,14 @@ from audax_core.reviews import (
 from audax_core.models import ImplementationReview, ReviewIssue
 from audax_core.ui import (
     build_input_box_style_map,
+    build_slash_command_completer,
     input_box_prompt_prefix,
     parse_markdown_sections,
     render_implementation_round_report,
     render_mission_approval_card,
     render_session_header_card,
     render_startup_card,
+    slash_command_suggestions,
 )
 
 
@@ -1871,6 +1877,24 @@ def test_make_claude_stream_chunk_handler_buffers_partial_lines() -> None:
     assert delivered == ["AAA", "BBB", "\n[Edit] "]
 
 
+def test_claude_stream_handler_summarizes_tool_inputs() -> None:
+    delivered: list[str] = []
+    handler = make_claude_stream_chunk_handler(delivered.append)
+
+    lines = [
+        '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Bash"}}}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"pytest tests/test_audax.py\\"}"}}}',
+        '{"type":"stream_event","event":{"type":"content_block_stop"}}',
+    ]
+
+    handler("\n".join(lines) + "\n")
+
+    assert delivered == ["\n[Bash] ", ": pytest tests/test_audax.py"]
+    assert summarize_claude_tool_use("Read", '{"file_path": "audax_core/app.py"}') == (
+        ": audax_core/app.py"
+    )
+
+
 def test_claude_cli_streams_partial_text_when_callback_provided(tmp_path: Path) -> None:
     streamed_lines = [
         '{"type":"system","subtype":"init"}',
@@ -1913,7 +1937,7 @@ def test_claude_cli_streams_partial_text_when_callback_provided(tmp_path: Path) 
 
     assert result == "FINAL"
     assert deltas == ["alpha ", "\n[Read] ", "beta"]
-    assert runner.calls[0]["disable_heartbeat"] is True
+    assert runner.calls[0]["disable_heartbeat"] is False
     assert runner.calls[0]["on_chunk"] is not None
 
 
@@ -2616,7 +2640,7 @@ def test_orchestrator_emits_round_report_to_output_stream(tmp_path: Path) -> Non
 
 
 def test_orchestrator_streams_claude_implementer_partial_output(tmp_path: Path) -> None:
-    """When Claude is the implementer, partial chunks must reach output_stream."""
+    """Claude drafting and implementation chunks must reach output_stream."""
     repo_root = tmp_path
     artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
     output = io.StringIO()
@@ -2628,9 +2652,8 @@ def test_orchestrator_streams_claude_implementer_partial_output(tmp_path: Path) 
             "## Accomplished\n- Wired middleware\n\n## Tests Run\n- pytest\n\n"
             "## Remaining Risks\n- None\n",
         ],
-        # Only the implementation call should receive stream chunks; the spec-
-        # drafting call gets no callback so its entry is irrelevant.
         stream_chunks=[
+            ["Drafting reduced mission... "],
             ["Reading repository... ", "writing patch... ", "done."],
         ],
     )
@@ -2660,9 +2683,11 @@ def test_orchestrator_streams_claude_implementer_partial_output(tmp_path: Path) 
     orchestrator.run("Ship it")
     rendered = output.getvalue()
 
+    assert "Drafting reduced mission..." in rendered
     assert "Reading repository..." in rendered
     assert "writing patch..." in rendered
-    assert "Claude live output" in rendered
+    assert "Claude live work log: mission spec drafting round 1" in rendered
+    assert "Claude live work log: implementation round 1" in rendered
     assert "end live output" in rendered
 
 
@@ -2795,26 +2820,120 @@ def test_render_startup_card_uses_box_layout() -> None:
     )
     rendered = render_startup_card(
         FakeTTY(),
-        build_startup_card_info_lines(args, repo_root=Path("/tmp/repo")),
+        build_startup_card_info_lines(args, repo_root=Path("/tmp/repo"), interactive=True),
     )
     plain = ANSI_PATTERN.sub("", rendered)
 
     assert "AUDAX CONSOLE" in plain
     assert "Enter the mission prompt for Audax." in plain
+    assert "Option+Enter inserts a new line" in plain
+    assert "/agents" in plain
+    assert "/flags" in plain
     assert "Target repository: /tmp/repo" in plain
-    assert "── Session Flags" in plain
-    assert "--mode: mission-spec" in plain
-    assert "--spec-rounds: 6" in plain
-    assert "--subprocess-timeout-seconds: disabled" in plain
-    assert "--require-approval/--no-require-approval: enabled" in plain
-    assert "── Claude Runtime" in plain
-    assert "── Codex Runtime" in plain
-    assert "model: opus" in plain
-    assert "reasoning effort: max" in plain
-    assert "model: gpt-5.5" in plain
-    assert "reasoning effort: xhigh" in plain
+    assert "── Session Flags" not in plain
+    assert "── Claude Runtime" not in plain
+    assert "── Codex Runtime" not in plain
+    assert "--mode: mission-spec" not in plain
     assert "╭" in rendered and "╰" in rendered
     assert "**--spec-rounds**" not in plain
+
+
+def test_startup_slash_commands_show_and_update_flags() -> None:
+    from audax_core.ui import ANSI_PATTERN
+
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    args = argparse.Namespace(
+        mode=MISSION_MODE_DIRECT,
+        spec_rounds=3,
+        implementation_rounds=5,
+        workspace_dir="custom_artifacts",
+        require_approval=True,
+        heartbeat_seconds=2.5,
+        subprocess_timeout_seconds=0,
+        claude_cmd="claude-custom",
+        codex_cmd="codex-custom",
+        auto_commit=True,
+        session_branch=False,
+    )
+    handler = build_startup_slash_command_handler(
+        args,
+        repo_root=Path("/tmp/repo"),
+        stream=FakeTTY(),
+    )
+
+    plain = ANSI_PATTERN.sub("", handler("/flags"))
+    assert "AUDAX FLAGS" in plain
+    assert "--mode: direct-instruction" in plain
+    assert "--spec-rounds: skipped in direct-instruction mode" in plain
+    assert "--subprocess-timeout-seconds: disabled" in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/mode mission-spec"))
+    assert args.mode == MISSION_MODE_SPEC
+    assert "Updated --mode to mission-spec." in plain
+    assert "--spec-rounds: 3" in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/spec rounds 7"))
+    assert args.spec_rounds == 7
+    assert "Updated --spec-rounds to 7." in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/input rounds 11"))
+    assert args.implementation_rounds == 11
+    assert "Updated --implementation-rounds to 11." in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/auto commit off"))
+    assert args.auto_commit is False
+    assert "Updated --auto-commit to disabled." in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/session branch on"))
+    assert args.session_branch is True
+    assert "Updated --session-branch to enabled." in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/require approval no"))
+    assert args.require_approval is False
+    assert "Updated --require-approval to disabled." in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/agents"))
+    assert "AUDAX AGENTS" in plain
+    assert "Claude Runtime" in plain
+    assert "Codex Runtime" in plain
+    assert "command: claude-custom" in plain
+    assert "command: codex-custom" in plain
+
+    plain = ANSI_PATTERN.sub("", handler("/help"))
+    assert "/exit" in plain
+
+    with pytest.raises(StartupExitRequested):
+        handler("/exit")
+
+
+def test_startup_slash_completer_filters_command_dropdown() -> None:
+    from prompt_toolkit.document import Document
+
+    completions = build_startup_slash_command_completions()
+    completer = build_slash_command_completer(completions)
+
+    def suggestions(text: str) -> list[str]:
+        return [
+            completion.text
+            for completion in completer.get_completions(Document(text), None)
+        ]
+
+    all_commands = suggestions("/")
+    assert "/agents" in all_commands
+    assert "/spec-rounds" in all_commands
+    assert "/implementation-rounds" in all_commands
+    assert "/exit" in all_commands
+
+    assert suggestions("/ag") == ["/agents"]
+    assert suggestions("/agents") == []
+    assert suggestions("/mode ") == []
+    assert suggestions("Build the thing") == []
+    assert slash_command_suggestions("/ag", completions) == [
+        ("/agents", "show Claude and Codex runtime details")
+    ]
 
 
 def test_build_repo_context_handles_symlinked_repo_root(tmp_path: Path) -> None:
@@ -2893,6 +3012,22 @@ def test_main_returns_130_on_keyboard_interrupt(
     assert "Interrupted." in captured.err
 
 
+def test_main_returns_zero_on_startup_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def exit_from_startup(args: argparse.Namespace) -> str:
+        raise StartupExitRequested
+
+    monkeypatch.setattr("audax_core.app.read_task", exit_from_startup)
+
+    exit_code = main([])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Audax exited." in captured.out
+
+
 def test_read_task_prompts_for_stdin(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO("build the thing"))
     task = read_task(argparse.Namespace(task=[]))
@@ -2938,13 +3073,10 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
     assert "Enter the mission prompt for Audax." in plain
     assert "Press Ctrl-D when you are done." in plain
     assert "Target repository:" in plain
-    assert "--mode: mission-spec" in plain
-    assert "--implementation-rounds: 12" in plain
-    assert "--claude-cmd: claude-enterprise" in plain
-    assert "--require-approval/--no-require-approval: enabled" in plain
-    assert "model: opus" in plain
-    assert "reasoning effort: max" in plain
-    assert "approvals/sandbox: dangerously-bypass-approvals-and-sandbox" in plain
+    assert "--mode: mission-spec" not in plain
+    assert "--implementation-rounds: 12" not in plain
+    assert "--claude-cmd: claude-enterprise" not in plain
+    assert "model: opus" not in plain
     assert "╭" in rendered and "╰" in rendered
 
 
@@ -2954,7 +3086,8 @@ def test_input_box_style_map_uses_shaded_background() -> None:
     assert style_map["input-window"].startswith("bg:#232a31")
     assert style_map["input-text"].startswith("bg:#232a31")
     assert style_map["input-prompt"].startswith("bg:#232a31")
-    assert "fg:#7cc7ff" in style_map["input-prompt"]
+    assert "fg:#f4f4f5" in style_map["input-text"]
+    assert "fg:#e5e7eb" in style_map["input-prompt"]
     assert "bold" in style_map["input-prompt"]
     assert style_map["input-frame"] == "fg:#5c6773"
     assert style_map["input-frame.border"] == "fg:#5c6773"

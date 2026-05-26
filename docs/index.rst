@@ -151,7 +151,8 @@ What Audax Guarantees
   fast if the contract has been mutated.
 * **Centralized backend behavior.** Claude and Codex run through explicit
   CLI adapters instead of ad hoc shell glue, so the exact flags used are
-  visible in ``audax_core/backends.py`` and on the startup card.
+  visible in ``audax_core/backends.py`` and through the interactive
+  ``/agents`` or ``/models`` startup commands.
 * **Inspectable failures.** Review loops persist both Claude summaries and
   Codex JSON reviews, so every run is auditable after the fact.
 * **Opt-in subprocess timeout.** No subprocess timeout by default; pass

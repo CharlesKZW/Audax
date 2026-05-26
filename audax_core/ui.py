@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import textwrap
+from collections.abc import Callable, Mapping
 from typing import TextIO
 import unicodedata
 
@@ -48,8 +50,8 @@ _INLINE_BOLD_UNDERSCORE_PATTERN = re.compile(r"__([^_\n]+?)__")
 INLINE_CODE_ANSI = "38;5;213"
 INLINE_BOLD_ANSI = "1"
 INPUT_BOX_BG = "#232a31"
-INPUT_BOX_FG = "#a8d4ff"
-INPUT_BOX_PROMPT_FG = "#7cc7ff"
+INPUT_BOX_FG = "#f4f4f5"
+INPUT_BOX_PROMPT_FG = "#e5e7eb"
 INPUT_BOX_BORDER_FG = "#5c6773"
 
 
@@ -104,6 +106,20 @@ def supports_rich_terminal(stream: TextIO) -> bool:
 
 def render_startup_card(stream: TextIO, info_lines: list[str] | None = None) -> str:
     """Render the interactive startup card shown before stdin mission entry."""
+    return render_info_card(
+        stream,
+        title="AUDAX CONSOLE",
+        info_lines=info_lines,
+    )
+
+
+def render_info_card(
+    stream: TextIO,
+    *,
+    title: str,
+    info_lines: list[str] | None = None,
+) -> str:
+    """Render a generic rich terminal information card."""
     del stream  # kept for signature compatibility with other card helpers
     color = os.environ.get("NO_COLOR") is None
     total_width = _card_width()
@@ -114,7 +130,7 @@ def render_startup_card(stream: TextIO, info_lines: list[str] | None = None) -> 
         "Audax will make changes in the current working directory.",
     ]
     return _compose_card(
-        title="AUDAX CONSOLE",
+        title=title,
         body_lines=body_lines,
         total_width=total_width,
         content_width=content_width,
@@ -151,30 +167,56 @@ def style_approval_mode(required: bool, *, color: bool) -> str:
     return _style("auto", "1;38;5;208", color=color)
 
 
-def read_task_interactive() -> str:
+def read_task_interactive(
+    *,
+    slash_commands: Mapping[str, str] | None = None,
+    slash_command_completions: Mapping[str, str] | None = None,
+    slash_command_handler: Callable[[str], str | None] | None = None,
+    stream: TextIO | None = None,
+) -> str:
     """Read a mission prompt via a Codex-style framed input box.
 
     A rounded gray frame surrounds the input area; the inner background is a
     shaded gray that fills every visible line so the user clearly perceives an
-    input box. The ``>`` prompt and input text are rendered in a soft blue.
-    Enter submits; Alt+Enter inserts a newline for multi-line prompts.
+    input box. The ``>`` prompt and input text use neutral foreground colors.
+    Slash commands show a completion dropdown while the command token is being
+    typed. Enter submits; Option+Enter inserts a newline for multi-line prompts.
     """
     from prompt_toolkit.application import Application
     from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.filters import Condition
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import Layout
-    from prompt_toolkit.layout.containers import Window
-    from prompt_toolkit.layout.controls import BufferControl
+    from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+    from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
     from prompt_toolkit.layout.dimension import Dimension
     from prompt_toolkit.layout.processors import BeforeInput
     from prompt_toolkit.lexers import SimpleLexer
     from prompt_toolkit.styles import Style
 
     bindings = KeyBindings()
+    completion_map = slash_command_completions or slash_commands or {}
+    normalized_completions = _normalize_slash_commands(completion_map)
+
+    def current_slash_suggestions() -> list[tuple[str, str]]:
+        return slash_command_suggestions(
+            buffer.document.current_line_before_cursor,
+            normalized_completions,
+        )
 
     @bindings.add("enter")
     def _submit(event) -> None:
         event.app.exit(result=event.current_buffer.text)
+
+    @bindings.add("tab")
+    def _complete_slash_command(event) -> None:
+        suggestions = current_slash_suggestions()
+        if not suggestions:
+            event.current_buffer.insert_text("\t")
+            return
+        token = event.current_buffer.document.current_line_before_cursor.lstrip().split(maxsplit=1)[0]
+        event.current_buffer.delete_before_cursor(len(token))
+        event.current_buffer.insert_text(suggestions[0][0])
 
     @bindings.add("escape", "enter")
     def _newline(event) -> None:
@@ -204,7 +246,22 @@ def read_task_interactive() -> str:
         dont_extend_height=True,
     )
 
-    frame = _build_rounded_input_frame(input_window)
+    frame = HSplit(
+        [
+            _build_rounded_input_frame(input_window),
+            ConditionalContainer(
+                content=Window(
+                    content=FormattedTextControl(
+                        lambda: _render_slash_menu_fragments(current_slash_suggestions())
+                    ),
+                    height=Dimension(min=1, max=12),
+                    style="class:slash-menu",
+                    dont_extend_height=True,
+                ),
+                filter=Condition(lambda: bool(current_slash_suggestions())),
+            ),
+        ]
+    )
 
     style = Style.from_dict(build_input_box_style_map())
 
@@ -217,11 +274,123 @@ def read_task_interactive() -> str:
         erase_when_done=False,
     )
 
-    try:
-        result = app.run()
-    except EOFError:
-        return ""
-    return result or ""
+    output_stream = stream or sys.stdout
+    commands = {key.lower(): value for key, value in (slash_commands or {}).items()}
+
+    while True:
+        try:
+            result = app.run()
+        except EOFError:
+            return ""
+
+        text = result or ""
+        command = text.strip().lower()
+        if command.startswith("/") and (slash_command_handler is not None or commands):
+            if slash_command_handler is not None:
+                rendered = slash_command_handler(text.strip())
+            else:
+                rendered = commands.get(command)
+                if rendered is None:
+                    rendered = _render_unknown_slash_command(command, commands)
+            if rendered is None:
+                rendered = ""
+            output_stream.write(rendered)
+            if not rendered.endswith("\n"):
+                output_stream.write("\n")
+            output_stream.flush()
+            buffer.reset()
+            continue
+        return text
+
+
+def _render_unknown_slash_command(command: str, commands: Mapping[str, str]) -> str:
+    """Render a compact message for an unrecognized interactive slash command."""
+    available = ", ".join(sorted(name for name in commands if name != "/"))
+    return f"Unknown Audax command: {command}\nAvailable commands: {available}\n"
+
+
+def slash_command_suggestions(
+    line_before_cursor: str,
+    commands: Mapping[str, str],
+) -> list[tuple[str, str]]:
+    """Return slash command suggestions for the current input line."""
+    normalized = _normalize_slash_commands(commands)
+    stripped = line_before_cursor.lstrip()
+    if not stripped.startswith("/"):
+        return []
+
+    token = stripped.split(maxsplit=1)[0]
+    if stripped != token:
+        return []
+
+    lowered = token.lower()
+    if lowered in normalized and lowered != "/":
+        return []
+
+    return [
+        (command, normalized[command])
+        for command in sorted(normalized)
+        if command.startswith(lowered)
+    ]
+
+
+def build_slash_command_completer(commands: Mapping[str, str]):
+    """Build a prompt-toolkit completer for startup slash commands."""
+    from prompt_toolkit.completion import Completer, Completion
+
+    normalized = _normalize_slash_commands(commands)
+
+    class SlashCommandCompleter(Completer):
+        def get_completions(self, document, complete_event):
+            del complete_event
+            before_cursor = document.current_line_before_cursor.lstrip()
+            token = before_cursor.split(maxsplit=1)[0] if before_cursor else ""
+            for command, description in slash_command_suggestions(
+                document.current_line_before_cursor,
+                normalized,
+            ):
+                yield Completion(
+                    command,
+                    start_position=-len(token),
+                    display=command,
+                    display_meta=description,
+                )
+
+    return SlashCommandCompleter()
+
+
+def _normalize_slash_commands(commands: Mapping[str, str]) -> dict[str, str]:
+    return {
+        command.lower(): description
+        for command, description in commands.items()
+        if command.startswith("/")
+    }
+
+
+def _render_slash_menu_fragments(suggestions: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for idx, (command, description) in enumerate(suggestions[:12]):
+        command_style = "class:slash-menu.command.current" if idx == 0 else "class:slash-menu.command"
+        meta_style = "class:slash-menu.meta.current" if idx == 0 else "class:slash-menu.meta"
+        row_style = "class:slash-menu.current" if idx == 0 else "class:slash-menu"
+        rows.extend(
+            [
+                (row_style, "  "),
+                (command_style, f"{command:<26}"),
+                (meta_style, description),
+                (row_style, "\n"),
+            ]
+        )
+    if len(suggestions) > 12:
+        rows.extend(
+            [
+                ("class:slash-menu", "  "),
+                ("class:slash-menu.meta", f"+ {len(suggestions) - 12} more"),
+            ]
+        )
+    elif rows:
+        rows.pop()
+    return rows
 
 
 def _build_rounded_input_frame(body):
@@ -275,6 +444,12 @@ def build_input_box_style_map() -> dict[str, str]:
         "input-window": base,
         "input-text": base,
         "input-prompt": f"{base} fg:{INPUT_BOX_PROMPT_FG} bold",
+        "slash-menu": "bg:#111827 fg:#d1d5db",
+        "slash-menu.current": "bg:#374151 fg:#ffffff",
+        "slash-menu.command": "bg:#111827 fg:#f4f4f5 bold",
+        "slash-menu.command.current": "bg:#374151 fg:#ffffff bold",
+        "slash-menu.meta": "bg:#111827 fg:#9ca3af",
+        "slash-menu.meta.current": "bg:#374151 fg:#e5e7eb",
     }
 
 

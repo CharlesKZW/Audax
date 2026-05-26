@@ -8,7 +8,11 @@
 
    .. autosummary::
    
+      build_startup_agent_info_lines
       build_startup_card_info_lines
+      build_startup_flag_info_lines
+      build_startup_slash_command_completions
+      build_startup_slash_command_handler
       continue_main
       ensure_cli_available
       forward_termination_signals
@@ -18,4 +22,10 @@
       read_task
       resolve_workspace_dir
       run_main
+   
+   .. rubric:: Exceptions
+
+   .. autosummary::
+   
+      StartupExitRequested
    
