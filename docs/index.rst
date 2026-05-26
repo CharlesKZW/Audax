@@ -140,10 +140,11 @@ positional task argument and finish stdin with ``Ctrl-D``:
 What Audax Guarantees
 ---------------------
 
-* **Outcome-level mission specs.** In ``mission-spec`` mode, drafts are
-  reviewed to keep success criteria focused on user-observable behavior and
-  major architectural decisions, avoiding unnecessary exact UI strings, test
-  identifiers, and implementation details.
+* **Reduced mission specs.** In ``mission-spec`` mode, drafts are reviewed to
+  keep the contract to 1-9 necessary, qualitative behavior bullets
+  that a nontechnical user can understand, avoiding unnecessary plans,
+  technical details, exact UI strings, test identifiers, and numeric acceptance
+  details.
 * **Locked mission contract.** The original prompt is locked by default; in
   ``mission-spec`` mode, the reviewed spec is locked instead. The orchestrator
   verifies the locked text digest around every implementation round and fails

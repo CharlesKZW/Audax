@@ -412,6 +412,24 @@ def parse_markdown_sections(text: str) -> dict[str, list[str]]:
     return sections
 
 
+def _extract_mission_spec_bullets(mission_spec: str) -> list[str]:
+    """Return user-facing mission success bullets from the current spec format."""
+    sections = parse_markdown_sections(mission_spec)
+    legacy_criteria = [
+        _strip_leading_number(item)
+        for item in _find_section(sections, "Mission Success Criteria")
+    ]
+    if legacy_criteria:
+        return legacy_criteria
+
+    bullets = [
+        _strip_leading_number(match.group(1).strip())
+        for line in mission_spec.splitlines()
+        if (match := _BULLET_PATTERN.match(line.rstrip())) is not None
+    ]
+    return bullets
+
+
 def _wrap_detail_row(
     label: str,
     value: str,
@@ -553,6 +571,22 @@ def render_mission_approval_card(
         lines.append(_style("Reviewer Summary", LABEL_ANSI, color=color))
         for wrapped in textwrap.wrap(review.summary, width=content_width) or [""]:
             lines.append(wrapped)
+
+    lines.append("")
+    lines.append(_style("Mission Success Behaviors", LABEL_ANSI, color=color))
+    behaviors = _extract_mission_spec_bullets(mission_spec)
+    if behaviors:
+        for idx, behavior in enumerate(behaviors, start=1):
+            numbered = f"{idx}. {behavior}"
+            lines.extend(_wrap_bullet(numbered, content_width, indent="  ", cont="     "))
+    else:
+        lines.append(
+            _style(
+                "  No mission success behaviors were found in the draft.",
+                BAD_ANSI,
+                color=color,
+            )
+        )
 
     lines.append("")
     lines.append(_style("High-Stakes / Controversial Decisions", LABEL_ANSI, color=color))
@@ -888,11 +922,7 @@ def _find_section(sections: dict[str, list[str]], name: str) -> list[str]:
 
 def _fallback_high_stakes_decisions(mission_spec: str) -> list[str]:
     """Best-effort extraction for approval summaries without reviewer context."""
-    sections = parse_markdown_sections(mission_spec)
-    criteria = [
-        _strip_leading_number(item)
-        for item in _find_section(sections, "Mission Success Criteria")
-    ]
+    criteria = _extract_mission_spec_bullets(mission_spec)
     if not criteria:
         return []
 

@@ -28,29 +28,22 @@ Mission Drafting
 
 During mission drafting, Audax builds a repository-context snapshot from files
 such as ``CLAUDE.md``, ``AGENTS.md``, ``CONTRIBUTING.md``, and ``README.md``.
-Claude is then asked to produce a markdown file with a strict structure:
+Claude is then asked to produce a reduced markdown bullet list: 1-9
+qualitative mission-success behaviors that a nontechnical user can understand.
 
-* Mission
-* Mission Success Criteria
-* Test Plan
-
-Required behaviors live inside ``Mission Success Criteria`` rather than a
-separate section. Those criteria are intentionally outcome-level: they should
-describe user-observable behavior and only capture major architectural
-decisions when those decisions affect public contracts, data flow, migrations,
-rollback posture, security, integrations, or other meaningful tradeoffs.
-
-The spec should avoid low-level mechanics, exact UI strings, test
-IDs/selectors, fixture names, file paths, function names, and test names unless
-those literals are part of the user-requested public contract. The ``Test
-Plan`` describes validation areas and relevant checks, while leaving exact test
-identifiers and implementation mechanics to the implementer.
+Each bullet must be necessary to judge mission success. The draft should avoid
+headings, task plans, test plans, implementation notes, low-level mechanics,
+exact UI strings, test IDs/selectors, fixture names, file paths, function names,
+test names, command names, and quantitative thresholds unless those literals
+are explicitly part of the requested public contract.
 
 Codex reviews that draft through a JSON schema instead of free-form prose. If
 Codex rejects the draft, Audax renders the issues into compact feedback and
 feeds them into the next Claude round. If the drafting budget is exhausted
 before Codex approves, Audax ships the latest draft for a final human decision
-and surfaces the latest reject message.
+and surfaces the latest reject message. Codex also rejects bloated drafts,
+unnecessary qualitative behaviors, duplicate or overlapping bullets, and
+technical details that are not required for user approval.
 
 Direct Instruction Mode
 -----------------------
@@ -73,8 +66,8 @@ Mission Approval And Locking
 
 In ``mission-spec`` mode, a user can:
 
-* review a compact approval card showing the high-stakes decisions plus any
-  unresolved reviewer sign-off blockers,
+* review a compact approval card showing the mission-success behaviors,
+  high-stakes decisions, and any unresolved reviewer sign-off blockers,
 * approve the draft and continue,
 * request changes with explicit feedback, or
 * abort the mission entirely.
@@ -110,8 +103,8 @@ with:
 * ``has_issues``
 * ``summary``
 * ``issues``
-* ``completed_criteria`` — mission success criteria currently met.
-* ``remaining_criteria`` — mission success criteria still unmet.
+* ``completed_criteria`` — mission behavior bullets currently met.
+* ``remaining_criteria`` — mission behavior bullets still unmet.
 * ``progress_pct`` — integer 0-100 grounded in the completed vs remaining
   split.
 

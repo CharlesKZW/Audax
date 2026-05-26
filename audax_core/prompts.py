@@ -47,25 +47,32 @@ def build_mission_spec_prompt(
         Do NOT create, write, or edit any file on disk. The orchestrator
         captures your response and persists it under the session directory.
 
-        Use these sections exactly:
-        1. Mission
-        2. Mission Success Criteria
-        3. Test Plan
+        Format:
+        - Return only a markdown bullet list.
+        - Use 1-9 bullets.
+        - Do not include headings, sections, prose introductions, a task plan,
+          a test plan, or implementation notes.
 
         Rules:
-        - Treat the spec as a human approval artifact: every line will be read, so every line must justify its existence.
-        - Write the shortest draft that preserves high-impact requirements, critical risks, and decisions that affect approval.
-        - Omit background, rationale, restatements, nice-to-haves, obvious implementation hygiene, and low-risk edge cases.
-        - Use concise bullets; avoid paragraphs, duplicate points, and low-signal bullets.
-        - Mission should be one sentence.
-        - Mission Success Criteria must focus on critical user-observable outcomes and externally visible behavior, not low-level implementation steps.
-        - Capture key architectural decisions only when they materially affect public contracts, data flow, migrations, rollback posture, security, integrations, or other major design tradeoffs.
-        - Avoid exact UI strings, test IDs/selectors, fixture names, file paths, function/class names, and test names unless the user explicitly requested that literal contract or it is necessary to identify an existing public surface.
-        - Put required behaviors inside Mission Success Criteria; do not create a separate Required Behaviors section.
+        - Treat the spec as a human approval artifact for nontechnical users:
+          every bullet must be understandable without implementation context.
+        - Each bullet must describe one qualitative behavior or user-visible
+          outcome that defines mission success.
+        - Every bullet must be absolutely necessary for mission success.
+        - Write the shortest complete draft; prefer broad, non-overlapping
+          behaviors over detailed sub-requirements.
+        - Omit background, rationale, restatements, nice-to-haves, obvious
+          implementation hygiene, and low-risk edge cases.
+        - Avoid technical details, implementation steps, file paths,
+          function/class names, test IDs/selectors, fixture names, test names,
+          exact UI strings, and command names unless the user explicitly made
+          that literal part of the public contract.
+        - Avoid quantitative thresholds, counts, timings, percentages, and
+          other numeric acceptance details unless the user explicitly requested
+          that exact public behavior.
         - When the request is ambiguous, prefer the more audacious interpretation.
-        - Any critical success criterion that is appropriate for deterministic coverage should be reflected in the Test Plan as a validation area, without prescribing exact test identifiers or implementation mechanics.
-        - The Test Plan should name only the checks needed to validate critical user-observable outcomes and major architectural decisions.
-        - Capture the spirit of the user request, not just the narrowest wording.
+        - Capture the spirit of the user request, not just the narrowest wording,
+          while keeping only the behaviors required to judge success.
         - Do not include meta commentary, chain-of-thought, or explanations outside the markdown body.
         """
     ).strip()
@@ -89,24 +96,30 @@ def build_mission_review_prompt(*, task: str, repo_context: str, mission_spec: s
         Return JSON only.
 
         Also return high_stakes_decisions: a short list of the major
-        architectural or user-visible decisions worth explicit human approval
-        because they materially affect scope, public contracts, destructive
-        change risk, migration/rollback posture, security posture, integrations,
-        or other controversial tradeoffs. Do not list low-level implementation
-        details. Return an empty list when there are no such decisions.
+        user-visible, public-contract, data, security, integration, destructive
+        change, migration/rollback, or scope decisions worth explicit human
+        approval. Do not list low-level implementation details. Return an empty
+        list when there are no such decisions.
 
         Approval standard:
         - Approve only if the spec fully captures the spirit of the user request.
-        - Approve only if every line has a clear approval or implementation purpose.
-        - Approve only if the spec is terse and limited to high-impact requirements, critical risks, and decisions that affect approval.
-        - Reject background, rationale, restatements, nice-to-haves, obvious implementation hygiene, low-risk edge cases, duplicate points, and other low-signal lines.
-        - Approve only if Mission Success Criteria focus on critical user-observable outcomes rather than internal implementation details.
-        - Approve only if key architectural decisions are captured at the major-decision level without over-prescribing mechanics.
-        - Approve only if the spec avoids unnecessary exact UI strings, test IDs/selectors, fixture names, file paths, function/class names, and test names.
-        - Approve only if Mission Success Criteria already includes the required behaviors instead of splitting them into a second section.
-        - Approve only if the Test Plan can validate the mission as a strategy while leaving exact test identifiers and implementation mechanics to the implementer.
-        - Approve only if deterministic, testable user outcomes are represented as appropriate validation areas in the Test Plan.
-        - Prefer concise drafts; reject bloated or duplicative specs.
+        - Approve only if the spec is only a markdown bullet list with 1-9
+          bullets.
+        - Approve only if every bullet is a qualitative behavior or
+          user-visible outcome that a nontechnical user can understand.
+        - Approve only if every bullet is absolutely necessary for mission
+          success.
+        - Reject unnecessary qualitative behaviors that are not required to
+          satisfy the original request.
+        - Reject technical details, implementation steps, file paths,
+          function/class names, test IDs/selectors, fixture names, test names,
+          exact UI strings, command names, quantitative thresholds, counts,
+          timings, percentages, and other numeric acceptance details unless the
+          user explicitly requested that literal public contract.
+        - Reject background, rationale, restatements, nice-to-haves, obvious
+          implementation hygiene, low-risk edge cases, duplicate points,
+          overlapping bullets, and other low-signal lines.
+        - Prefer concise drafts; reject bloated or over-prescriptive specs.
         - When the spec is underspecified, prefer rejecting it and asking for the more audacious version.
 
         Issues must describe only the problem, evidence, severity, and why it blocks approval.
@@ -156,7 +169,7 @@ def build_implementation_prompt(
         contents_heading = "Locked mission_spec.md contents"
         implementation_rule = "Implement all remaining mission requirements directly in the repository."
         testing_rule = (
-            "Implement automated tests for mission success criteria that can be "
+            "Implement automated tests for mission behavior criteria that can be "
             "covered with deterministic checks."
         )
     return textwrap.dedent(
@@ -248,15 +261,15 @@ def build_implementation_review_prompt(
             """
             Progress reporting (required fields):
             - completed_criteria: list of short human-readable descriptions of
-              each mission success criterion that is currently met.
+              each mission behavior bullet that is currently met.
             - remaining_criteria: list of short human-readable descriptions of
-              each mission success criterion that is NOT yet met.
+              each mission behavior bullet that is NOT yet met.
             - progress_pct: integer 0-100 estimating overall mission completion,
               grounded in the completed vs remaining split. Use the exact ratio
               when possible (e.g. 3 of 5 criteria met -> 60).
             - Draw completed_criteria and remaining_criteria directly from the
-              mission spec's Mission Success Criteria section; together they
-              should cover every criterion exactly once.
+              mission spec's qualitative behavior bullets; together they should
+              cover every bullet exactly once.
             """
         ).strip()
     return textwrap.dedent(

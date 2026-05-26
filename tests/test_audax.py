@@ -184,15 +184,20 @@ def test_mission_spec_prompts_prioritize_observable_outcomes_over_specifics() ->
     combined = f"{draft_prompt}\n{review_prompt}\n{implementation_review_prompt}"
 
     assert "falsifiable" not in combined.lower()
-    assert "user-observable outcomes" in combined
-    assert "key architectural decisions" in combined
-    assert "every line must justify its existence" in draft_prompt
-    assert "limited to high-impact requirements, critical risks" in review_prompt
+    assert "Return only a markdown bullet list" in draft_prompt
+    assert "Use 1-9 bullets" in draft_prompt
+    assert "qualitative behavior" in combined
+    assert "user-visible outcome" in combined
+    assert "nontechnical users" in draft_prompt
+    assert "Every bullet must be absolutely necessary" in draft_prompt
+    assert "Reject unnecessary qualitative behaviors" in review_prompt
     assert "Reject background, rationale, restatements" in review_prompt
     assert "Do not prescribe fixes or implementation strategy" in review_prompt
-    assert "Avoid exact UI strings, test IDs/selectors" in draft_prompt
-    assert "spec avoids unnecessary exact UI strings, test IDs/selectors" in review_prompt
-    assert "without prescribing exact test identifiers" in combined
+    assert "Avoid technical details, implementation steps" in draft_prompt
+    assert "quantitative thresholds" in review_prompt
+    assert "counts" in review_prompt
+    assert "timings" in review_prompt
+    assert "mission spec's qualitative behavior bullets" in implementation_review_prompt
     assert "use end-to-end Playwright checks against the running app when feasible" in implementation_review_prompt
     assert "treat that as a test_gap" in implementation_review_prompt
 
@@ -2491,12 +2496,14 @@ def test_render_mission_approval_card_contains_focus_and_blockers() -> None:
 
     rendered = render_mission_approval_card(
         mission_spec_path=Path("mission_spec.md"),
-        mission_spec="# Mission\nHidden from the approval card\n",
+        mission_spec="- Customers can complete checkout without losing their cart.\n",
         review=review,
     )
 
     assert "Mission Approval Request" in rendered
     assert "CHANGES REQUESTED" in rendered
+    assert "Mission Success Behaviors" in rendered
+    assert "Customers can complete checkout without losing their cart." in rendered
     assert "High-Stakes / Controversial Decisions" in rendered
     assert "Change the public API response format." in rendered
     assert "Reviewer Sign-Off Blockers" in rendered

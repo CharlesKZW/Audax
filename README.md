@@ -81,11 +81,12 @@ user task
 available when you want Audax to draft and review `mission_spec.md` before
 implementation; pass `--mode mission-spec` to use that flow.
 
-Mission specs are intentionally outcome-level. Success criteria should describe
-user-observable behavior, while the spec captures only major architectural
-decisions that affect public contracts, data flow, migrations, rollback,
-security, or integrations. It should avoid low-level mechanics, exact UI copy,
-test IDs/selectors, fixture names, file paths, function names, and test names
+Mission specs are intentionally reduced. In `mission-spec` mode, the draft is
+only a markdown bullet list with 1-9 qualitative mission-success
+behaviors that a nontechnical user can understand. Every bullet should be
+necessary to judge success, and the spec should avoid task plans, test plans,
+low-level mechanics, exact UI copy, test IDs/selectors, fixture names, file
+paths, function names, command names, quantitative thresholds, and test names
 unless those literals are part of the requested public contract.
 
 Each run creates a timestamped session directory under
