@@ -102,6 +102,7 @@ class ReviewLoopOrchestrator:
         self._latest_mission_spec_review_approved: bool | None = None
         self._latest_mission_spec_review_summary = ""
         self._latest_mission_spec_review_feedback = ""
+        self._streaming_active = False
         self.artifacts.ensure_directories()
 
     def run(self, task: str) -> RunSummary:
@@ -494,7 +495,9 @@ class ReviewLoopOrchestrator:
                 role="implementation",
                 round_num=round_num,
                 candidates=self.implementers,
+                on_text_delta=self._stream_implementer_text,
             )
+            self._finalize_streaming()
 
             implementation_output_path = self.artifacts.output_path(
                 f"implementation_{implementer_backend}", round_num, "md",
@@ -762,6 +765,28 @@ class ReviewLoopOrchestrator:
         self.output_stream.write(f"{message}\n")
         self.output_stream.flush()
 
+    def _stream_implementer_text(self, text: str) -> None:
+        """Stream a chunk of implementer text to the output stream.
+
+        Used as the ``on_text_delta`` callback when Claude is the implementer
+        so the user can see Claude's partial output and tool calls live. The
+        first chunk emits a separator header so the streamed content is
+        visually distinct from Audax's own status lines.
+        """
+        if not self._streaming_active:
+            self._streaming_active = True
+            self.output_stream.write("\n  ── Claude live output ─────────────────────\n")
+        self.output_stream.write(text)
+        self.output_stream.flush()
+
+    def _finalize_streaming(self) -> None:
+        """Close the live-output block once the implementer call returns."""
+        if not self._streaming_active:
+            return
+        self._streaming_active = False
+        self.output_stream.write("\n  ── end live output ────────────────────────\n")
+        self.output_stream.flush()
+
     def _lock_current_contract(
         self,
         current_text: str,
@@ -927,18 +952,24 @@ class ReviewLoopOrchestrator:
         role: str,
         round_num: int,
         candidates: list[Any],
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> tuple[str, str]:
         """Call text-producing backends in order until one succeeds.
 
         Returns ``(output, backend_name)``. Raises ``RuntimeError`` only when
         every candidate has failed. Each fallback emits a stdout line and a
-        ``role_fallback_triggered`` event.
+        ``role_fallback_triggered`` event. When ``on_text_delta`` is provided,
+        backends that support it stream partial output to the callback as the
+        underlying CLI generates it.
         """
         last_error = ""
         for idx, backend in enumerate(candidates):
             backend_name = self._backend_name(backend)
             try:
-                output = backend.run(prompt, label).strip()
+                kwargs: dict[str, Any] = {}
+                if on_text_delta is not None:
+                    kwargs["on_text_delta"] = on_text_delta
+                output = backend.run(prompt, label, **kwargs).strip()
                 if not output:
                     raise RuntimeError("backend returned empty output")
                 if idx > 0:

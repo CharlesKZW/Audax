@@ -27,7 +27,12 @@ from audax_core import (
     lock_mission_spec,
 )
 from audax_core.approval import interactive_mission_approval
-from audax_core.backends import ClaudeCLI, parse_claude_stream_output
+from audax_core.backends import (
+    ClaudeCLI,
+    extract_claude_stream_event_text,
+    make_claude_stream_chunk_handler,
+    parse_claude_stream_output,
+)
 from audax_core.app import (
     build_startup_card_info_lines,
     continue_main,
@@ -60,7 +65,6 @@ from audax_core.reviews import (
 from audax_core.models import ImplementationReview, ReviewIssue
 from audax_core.ui import (
     build_input_box_style_map,
-    input_box_continuation_prefix,
     input_box_prompt_prefix,
     parse_markdown_sections,
     render_implementation_round_report,
@@ -73,14 +77,23 @@ from audax_core.ui import (
 class FakeClaude:
     name = "claude"
 
-    def __init__(self, responses: list[str], json_responses: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        responses: list[str],
+        json_responses: list[dict] | None = None,
+        stream_chunks: list[list[str]] | None = None,
+    ) -> None:
         self.responses = list(responses)
         self.json_responses = list(json_responses or [])
+        self.stream_chunks: list[list[str]] = list(stream_chunks or [])
         self.calls: list[tuple[str, str]] = []
         self.json_calls: list[tuple[str, str, dict]] = []
 
-    def run(self, prompt: str, label: str) -> str:
+    def run(self, prompt: str, label: str, *, on_text_delta=None) -> str:
         self.calls.append((label, prompt))
+        if on_text_delta is not None and self.stream_chunks:
+            for chunk in self.stream_chunks.pop(0):
+                on_text_delta(chunk)
         if not self.responses:
             raise AssertionError("FakeClaude ran out of scripted responses")
         response = self.responses.pop(0)
@@ -116,7 +129,8 @@ class FakeCodex:
             raise response
         return response
 
-    def run(self, prompt: str, label: str) -> str:
+    def run(self, prompt: str, label: str, *, on_text_delta=None) -> str:
+        del on_text_delta  # Codex does not stream partial output.
         self.text_calls.append((label, prompt))
         if not self.text_responses:
             raise AssertionError("FakeCodex ran out of scripted text responses")
@@ -1803,6 +1817,145 @@ def test_parse_claude_stream_output_returns_only_text_deltas() -> None:
     assert parse_claude_stream_output(output) == "FINAL_RESULT"
 
 
+def test_extract_claude_stream_event_text_returns_text_and_tool_indicators() -> None:
+    text_event = {
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "hello"},
+        },
+    }
+    tool_event = {
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "name": "Bash"},
+        },
+    }
+    text_block_start = {
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_start",
+            "content_block": {"type": "text", "text": ""},
+        },
+    }
+    init_event = {"type": "system", "subtype": "init"}
+
+    assert extract_claude_stream_event_text(text_event) == "hello"
+    assert extract_claude_stream_event_text(tool_event) == "\n[Bash] "
+    assert extract_claude_stream_event_text(text_block_start) == ""
+    assert extract_claude_stream_event_text(init_event) == ""
+
+
+def test_make_claude_stream_chunk_handler_buffers_partial_lines() -> None:
+    delivered: list[str] = []
+    handler = make_claude_stream_chunk_handler(delivered.append)
+
+    line_a = '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"AAA"}}}'
+    line_b = '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"BBB"}}}'
+    line_c = '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Edit"}}}'
+
+    # Split mid-line on purpose so the buffer must reassemble it.
+    handler(line_a[:20])
+    handler(line_a[20:] + "\n" + line_b + "\n")
+    handler(line_c[:30])
+    handler(line_c[30:] + "\n")
+    # Garbage line should be ignored without crashing.
+    handler("not-json\n")
+
+    assert delivered == ["AAA", "BBB", "\n[Edit] "]
+
+
+def test_claude_cli_streams_partial_text_when_callback_provided(tmp_path: Path) -> None:
+    streamed_lines = [
+        '{"type":"system","subtype":"init"}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"alpha "}}}',
+        '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Read"}}}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"beta"}}}',
+        '{"type":"result","result":"FINAL"}',
+    ]
+
+    class StreamingFakeRunner:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def run(
+            self,
+            cmd: list[str],
+            label: str,
+            *,
+            cwd: Path,
+            stdin_text: str | None = None,
+            on_chunk=None,
+            disable_heartbeat: bool = False,
+        ) -> str:
+            self.calls.append(
+                {"on_chunk": on_chunk, "disable_heartbeat": disable_heartbeat},
+            )
+            full = "\n".join(streamed_lines) + "\n"
+            if on_chunk is not None:
+                # Deliver in two chunks, splitting one of the lines in the middle.
+                split = len(full) // 2
+                on_chunk(full[:split])
+                on_chunk(full[split:])
+            return full
+
+    deltas: list[str] = []
+    runner = StreamingFakeRunner()
+    cli = ClaudeCLI("claude", runner, tmp_path)
+
+    result = cli.run("prompt", "label", on_text_delta=deltas.append)
+
+    assert result == "FINAL"
+    assert deltas == ["alpha ", "\n[Read] ", "beta"]
+    assert runner.calls[0]["disable_heartbeat"] is True
+    assert runner.calls[0]["on_chunk"] is not None
+
+
+def test_claude_cli_skips_streaming_when_no_callback(tmp_path: Path) -> None:
+    class PassThroughRunner:
+        def __init__(self) -> None:
+            self.disable_heartbeat: bool | None = None
+            self.on_chunk: object = "unset"
+
+        def run(
+            self,
+            cmd: list[str],
+            label: str,
+            *,
+            cwd: Path,
+            stdin_text: str | None = None,
+            on_chunk=None,
+            disable_heartbeat: bool = False,
+        ) -> str:
+            self.disable_heartbeat = disable_heartbeat
+            self.on_chunk = on_chunk
+            return '{"type":"result","result":"OK"}\n'
+
+    runner = PassThroughRunner()
+    cli = ClaudeCLI("claude", runner, tmp_path)
+    cli.run("prompt", "label")
+
+    assert runner.disable_heartbeat is False
+    assert runner.on_chunk is None
+
+
+def test_quiet_process_runner_invokes_on_chunk_for_each_read(tmp_path: Path) -> None:
+    runner = QuietProcessRunner(heartbeat_seconds=0.01)
+    received: list[str] = []
+    output = runner.run(
+        [sys.executable, "-c", "import sys; sys.stdout.write('one\\n'); sys.stdout.flush(); sys.stdout.write('two\\n')"],
+        label="chunk-test",
+        cwd=tmp_path,
+        on_chunk=received.append,
+        disable_heartbeat=True,
+    )
+
+    joined = "".join(received)
+    assert "one" in joined and "two" in joined
+    assert output == joined
+
+
 def test_claude_cli_sends_prompt_via_stdin_instead_of_argv(tmp_path: Path) -> None:
     class FakeProcessRunner:
         def __init__(self) -> None:
@@ -1815,6 +1968,8 @@ def test_claude_cli_sends_prompt_via_stdin_instead_of_argv(tmp_path: Path) -> No
             *,
             cwd: Path,
             stdin_text: str | None = None,
+            on_chunk=None,
+            disable_heartbeat: bool = False,
         ) -> str:
             self.calls.append(
                 {
@@ -1822,6 +1977,8 @@ def test_claude_cli_sends_prompt_via_stdin_instead_of_argv(tmp_path: Path) -> No
                     "label": label,
                     "cwd": cwd,
                     "stdin_text": stdin_text,
+                    "on_chunk": on_chunk,
+                    "disable_heartbeat": disable_heartbeat,
                 }
             )
             return '{"type":"result","result":"CLAUDE_OK"}\n'
@@ -2145,10 +2302,10 @@ def test_orchestrator_auto_commits_each_implementation_round(tmp_path: Path) -> 
             self.repo_root = repo_root
             self.calls = inner.calls
 
-        def run(self, prompt: str, label: str) -> str:
+        def run(self, prompt: str, label: str, *, on_text_delta=None) -> str:
             if "implementation round" in label.lower():
                 (self.repo_root / "feature.py").write_text("print('hi')\n", encoding="utf-8")
-            return self.inner.run(prompt, label)
+            return self.inner.run(prompt, label, on_text_delta=on_text_delta)
 
     editing = EditingClaude(claude, repo_root)
     committer = AutoCommitter(
@@ -2451,6 +2608,57 @@ def test_orchestrator_emits_round_report_to_output_stream(tmp_path: Path) -> Non
     assert "Wired middleware" in rendered
 
 
+def test_orchestrator_streams_claude_implementer_partial_output(tmp_path: Path) -> None:
+    """When Claude is the implementer, partial chunks must reach output_stream."""
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+
+    claude = FakeClaude(
+        [
+            "# Mission\nShip\n\n## Mission Success Criteria\n- Observable\n\n"
+            "## Required Behaviors\n- B\n\n## Test Plan\n- C\n\n## Constraints And Non-Goals\n- D\n",
+            "## Accomplished\n- Wired middleware\n\n## Tests Run\n- pytest\n\n"
+            "## Remaining Risks\n- None\n",
+        ],
+        # Only the implementation call should receive stream chunks; the spec-
+        # drafting call gets no callback so its entry is irrelevant.
+        stream_chunks=[
+            ["Reading repository... ", "writing patch... ", "done."],
+        ],
+    )
+    codex = FakeCodex(
+        [
+            {"approved": True, "summary": "Spec is acceptable.", "issues": []},
+            {
+                "mission_accomplished": True,
+                "has_issues": False,
+                "summary": "Done.",
+                "issues": [],
+                "completed_criteria": ["Observable criterion met"],
+                "remaining_criteria": [],
+                "progress_pct": 100,
+            },
+        ]
+    )
+
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=claude,
+        codex=codex,
+        approval_gate=lambda *_: ApprovalDecision(approved=True),
+        output_stream=output,
+    )
+    orchestrator.run("Ship it")
+    rendered = output.getvalue()
+
+    assert "Reading repository..." in rendered
+    assert "writing patch..." in rendered
+    assert "Claude live output" in rendered
+    assert "end live output" in rendered
+
+
 def test_implementation_review_parser_uses_progress_fields() -> None:
     from audax_core.reviews import parse_implementation_review
 
@@ -2736,12 +2944,14 @@ def test_read_task_renders_tty_startup_card(monkeypatch: pytest.MonkeyPatch) -> 
 def test_input_box_style_map_uses_shaded_background() -> None:
     style_map = build_input_box_style_map()
 
-    assert style_map[""].startswith("bg:#232a31")
-    assert style_map["prompt"].startswith("bg:#232a31")
-    assert style_map["input"].startswith("bg:#232a31")
-    assert style_map["continuation"].startswith("bg:#232a31")
-    assert input_box_prompt_prefix() == "  > "
-    assert input_box_continuation_prefix() == "    "
+    assert style_map["input-window"].startswith("bg:#232a31")
+    assert style_map["input-text"].startswith("bg:#232a31")
+    assert style_map["input-prompt"].startswith("bg:#232a31")
+    assert "fg:#7cc7ff" in style_map["input-prompt"]
+    assert "bold" in style_map["input-prompt"]
+    assert style_map["input-frame"] == "fg:#5c6773"
+    assert style_map["input-frame.border"] == "fg:#5c6773"
+    assert input_box_prompt_prefix() == " > "
 
 
 def test_user_approval_feedback_survives_subsequent_codex_rejection(tmp_path: Path) -> None:

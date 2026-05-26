@@ -48,8 +48,9 @@ _INLINE_BOLD_UNDERSCORE_PATTERN = re.compile(r"__([^_\n]+?)__")
 INLINE_CODE_ANSI = "38;5;213"
 INLINE_BOLD_ANSI = "1"
 INPUT_BOX_BG = "#232a31"
-INPUT_BOX_FG = "#e6edf3"
+INPUT_BOX_FG = "#a8d4ff"
 INPUT_BOX_PROMPT_FG = "#7cc7ff"
+INPUT_BOX_BORDER_FG = "#5c6773"
 
 
 def _strip_leading_number(item: str) -> str:
@@ -151,15 +152,21 @@ def style_approval_mode(required: bool, *, color: bool) -> str:
 
 
 def read_task_interactive() -> str:
-    """Read a mission prompt via a Codex-style input box.
+    """Read a mission prompt via a Codex-style framed input box.
 
-    Renders a single ``>`` prompt with a shaded background. Long input wraps
-    visually onto the next line; Enter submits; Alt+Enter inserts a newline so
-    the user can compose multi-line prompts.
+    A rounded gray frame surrounds the input area; the inner background is a
+    shaded gray that fills every visible line so the user clearly perceives an
+    input box. The ``>`` prompt and input text are rendered in a soft blue.
+    Enter submits; Alt+Enter inserts a newline for multi-line prompts.
     """
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import Window
+    from prompt_toolkit.layout.controls import BufferControl
+    from prompt_toolkit.layout.dimension import Dimension
+    from prompt_toolkit.layout.processors import BeforeInput
     from prompt_toolkit.lexers import SimpleLexer
     from prompt_toolkit.styles import Style
 
@@ -167,51 +174,113 @@ def read_task_interactive() -> str:
 
     @bindings.add("enter")
     def _submit(event) -> None:
-        event.current_buffer.validate_and_handle()
+        event.app.exit(result=event.current_buffer.text)
 
     @bindings.add("escape", "enter")
     def _newline(event) -> None:
         event.current_buffer.insert_text("\n")
 
+    @bindings.add("c-d")
+    def _eof(event) -> None:
+        event.app.exit(result="")
+
+    @bindings.add("c-c")
+    def _interrupt(event) -> None:
+        event.app.exit(exception=KeyboardInterrupt)
+
+    buffer = Buffer(multiline=True)
+
+    input_window = Window(
+        content=BufferControl(
+            buffer=buffer,
+            input_processors=[
+                BeforeInput(input_box_prompt_prefix(), style="class:input-prompt")
+            ],
+            lexer=SimpleLexer(style="class:input-text"),
+        ),
+        wrap_lines=True,
+        style="class:input-window",
+        height=Dimension(min=1),
+        dont_extend_height=True,
+    )
+
+    frame = _build_rounded_input_frame(input_window)
+
     style = Style.from_dict(build_input_box_style_map())
 
-    session = PromptSession(
-        message=FormattedText([("class:prompt", input_box_prompt_prefix())]),
-        multiline=True,
-        wrap_lines=True,
-        style=style,
-        lexer=SimpleLexer(style="class:input"),
+    app = Application(
+        layout=Layout(frame, focused_element=input_window),
         key_bindings=bindings,
-        prompt_continuation=lambda width, line_number, is_soft_wrap: [
-            ("class:continuation", input_box_continuation_prefix())
-        ],
+        style=style,
+        full_screen=False,
+        mouse_support=False,
+        erase_when_done=False,
     )
 
     try:
-        return session.prompt()
+        result = app.run()
     except EOFError:
         return ""
+    return result or ""
+
+
+def _build_rounded_input_frame(body):
+    """Wrap ``body`` in a Codex-style rounded border using box-drawing chars.
+
+    The default ``prompt_toolkit.widgets.Frame`` only ships with sharp corners;
+    Codex CLI's input box uses rounded corners (``╭ ╮ ╰ ╯``) so we build the
+    border manually out of single-character ``Window`` cells.
+    """
+    from functools import partial
+    from prompt_toolkit.layout.containers import HSplit, VSplit, Window
+
+    fill = partial(Window, style="class:input-frame.border")
+    return HSplit(
+        [
+            VSplit(
+                [
+                    fill(width=1, height=1, char="╭"),
+                    fill(char="─"),
+                    fill(width=1, height=1, char="╮"),
+                ],
+                height=1,
+            ),
+            VSplit(
+                [
+                    fill(width=1, char="│"),
+                    body,
+                    fill(width=1, char="│"),
+                ],
+            ),
+            VSplit(
+                [
+                    fill(width=1, height=1, char="╰"),
+                    fill(char="─"),
+                    fill(width=1, height=1, char="╯"),
+                ],
+                height=1,
+            ),
+        ],
+        style="class:input-frame",
+    )
 
 
 def build_input_box_style_map() -> dict[str, str]:
-    """Return the prompt-toolkit style map for the shaded mission input box."""
+    """Return prompt-toolkit style map for the framed mission input box."""
     base = f"bg:{INPUT_BOX_BG} fg:{INPUT_BOX_FG}"
+    border = f"fg:{INPUT_BOX_BORDER_FG}"
     return {
-        "": base,
-        "prompt": f"{base} fg:{INPUT_BOX_PROMPT_FG} bold",
-        "input": base,
-        "continuation": base,
+        "input-frame": border,
+        "input-frame.border": border,
+        "input-window": base,
+        "input-text": base,
+        "input-prompt": f"{base} fg:{INPUT_BOX_PROMPT_FG} bold",
     }
 
 
 def input_box_prompt_prefix() -> str:
-    """Return the styled prefix for the first line of the input box."""
-    return "  > "
-
-
-def input_box_continuation_prefix() -> str:
-    """Return the styled prefix for wrapped or continued input lines."""
-    return "    "
+    """Return the styled prefix for the input cursor position."""
+    return " > "
 
 
 def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) -> str:

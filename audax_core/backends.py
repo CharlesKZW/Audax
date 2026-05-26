@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import tempfile
 import textwrap
-from typing import Any
+from typing import Any, Callable
 
 from .progress import QuietProcessRunner
 
@@ -60,6 +60,64 @@ def parse_claude_stream_output(output: str) -> str:
     if assembled:
         return assembled
     return output.strip()
+
+
+def extract_claude_stream_event_text(event: dict[str, Any]) -> str:
+    """Return user-visible text emitted by a single Claude stream-json event.
+
+    Streams partial assistant text and a one-line indicator for each tool call
+    Claude makes. Other event types return ``""`` so the streaming display
+    stays focused on what the user can act on.
+    """
+    if event.get("type") != "stream_event":
+        return ""
+    inner = event.get("event") or {}
+    inner_type = inner.get("type")
+
+    if inner_type == "content_block_delta":
+        delta = inner.get("delta") or {}
+        if delta.get("type") == "text_delta":
+            return delta.get("text", "") or ""
+        return ""
+
+    if inner_type == "content_block_start":
+        block = inner.get("content_block") or {}
+        if block.get("type") == "tool_use":
+            name = block.get("name") or "tool"
+            return f"\n[{name}] "
+        return ""
+
+    return ""
+
+
+def make_claude_stream_chunk_handler(
+    on_text: Callable[[str], None],
+) -> Callable[[str], None]:
+    """Build an ``on_chunk`` handler that re-emits Claude stream-json text events.
+
+    Output from Claude's ``--output-format stream-json`` is line-delimited JSON.
+    The returned handler buffers partial lines across chunks, parses each
+    completed line, and forwards user-visible deltas to ``on_text``.
+    """
+    line_buffer = [""]
+
+    def handler(chunk: str) -> None:
+        line_buffer[0] += chunk
+        lines = line_buffer[0].split("\n")
+        line_buffer[0] = lines[-1]
+        for raw in lines[:-1]:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            text = extract_claude_stream_event_text(event)
+            if text:
+                on_text(text)
+
+    return handler
 
 
 def _wrap_prompt_with_schema(prompt: str, schema: dict[str, Any]) -> str:
@@ -121,8 +179,19 @@ class ClaudeCLI:
         self.process_runner = process_runner
         self.repo_root = repo_root
 
-    def run(self, prompt: str, label: str) -> str:
-        """Execute Claude with a plain-text prompt and return its rendered text."""
+    def run(
+        self,
+        prompt: str,
+        label: str,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """Execute Claude with a plain-text prompt and return its rendered text.
+
+        When ``on_text_delta`` is provided, Claude's partial assistant text and
+        tool-use indicators stream to the callback as they arrive; the spinner
+        heartbeat is suppressed so the streamed output stays clean.
+        """
         cmd = [
             self.cmd,
             "-p",
@@ -145,7 +214,18 @@ class ClaudeCLI:
             cmd.append("--verbose")
         if CLAUDE_INCLUDE_PARTIAL_MESSAGES:
             cmd.append("--include-partial-messages")
-        output = self.process_runner.run(cmd, label, cwd=self.repo_root, stdin_text=prompt)
+
+        on_chunk: Callable[[str], None] | None = None
+        if on_text_delta is not None:
+            on_chunk = make_claude_stream_chunk_handler(on_text_delta)
+        output = self.process_runner.run(
+            cmd,
+            label,
+            cwd=self.repo_root,
+            stdin_text=prompt,
+            on_chunk=on_chunk,
+            disable_heartbeat=on_chunk is not None,
+        )
         return parse_claude_stream_output(output)
 
     def run_json(self, prompt: str, label: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -193,8 +273,20 @@ class CodexCLI:
                 raise RuntimeError(f"{label} finished without creating {output_path}")
             return json.loads(output_path.read_text(encoding="utf-8"))
 
-    def run(self, prompt: str, label: str) -> str:
-        """Execute Codex in implementer-fallback mode and return its text output."""
+    def run(
+        self,
+        prompt: str,
+        label: str,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """Execute Codex in implementer-fallback mode and return its text output.
+
+        ``on_text_delta`` is accepted for API symmetry with :class:`ClaudeCLI`
+        but ignored: Codex's CLI does not expose a per-token streaming format,
+        so partial output is not available here.
+        """
+        del on_text_delta
         cmd = self._base_cmd()
         cmd.append("-")
         return self.process_runner.run(

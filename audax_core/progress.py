@@ -133,8 +133,16 @@ class QuietProcessRunner:
         *,
         cwd: Path,
         stdin_text: str | None = None,
+        on_chunk: Callable[[str], None] | None = None,
+        disable_heartbeat: bool = False,
     ) -> str:
-        """Run a command, capture combined output, and enforce an optional timeout."""
+        """Run a command, capture combined output, and enforce an optional timeout.
+
+        ``on_chunk`` receives each raw stdout chunk as it arrives, in the
+        background drain thread; callers use it to stream partial output to
+        the user. ``disable_heartbeat`` suppresses the spinner so the streamed
+        output is not clobbered by carriage-return updates.
+        """
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
@@ -157,6 +165,12 @@ class QuietProcessRunner:
                     if not chunk:
                         break
                     chunks.append(chunk)
+                    if on_chunk is not None:
+                        try:
+                            on_chunk(chunk)
+                        except BaseException:
+                            # Never let a callback failure break the drain.
+                            pass
             except BaseException as exc:  # pragma: no cover
                 read_errors.append(exc)
             finally:
@@ -166,12 +180,14 @@ class QuietProcessRunner:
         thread = threading.Thread(target=drain_stdout, daemon=True)
         thread.start()
 
-        progress = HeartbeatProgress(
-            label=label,
-            interval_seconds=self.heartbeat_seconds,
-            stream=self.progress_stream,
-        )
-        progress.start()
+        progress: HeartbeatProgress | None = None
+        if not disable_heartbeat:
+            progress = HeartbeatProgress(
+                label=label,
+                interval_seconds=self.heartbeat_seconds,
+                stream=self.progress_stream,
+            )
+            progress.start()
         started_at = time.monotonic()
         timed_out = False
         return_code: int | None = None
@@ -183,12 +199,16 @@ class QuietProcessRunner:
                 proc.stdin.write(stdin_text)
                 proc.stdin.close()
 
-            sleep_seconds = 0.1 if progress.uses_inline_updates else (
+            inline_sleep = (
+                progress is not None and progress.uses_inline_updates
+            )
+            sleep_seconds = 0.1 if inline_sleep else (
                 0.2 if self.heartbeat_seconds <= 0 else min(0.5, self.heartbeat_seconds / 2)
             )
             while proc.poll() is None:
                 time.sleep(sleep_seconds)
-                progress.maybe_emit()
+                if progress is not None:
+                    progress.maybe_emit()
                 if self.subprocess_timeout_seconds is not None:
                     elapsed = time.monotonic() - started_at
                     if elapsed >= self.subprocess_timeout_seconds:
@@ -206,14 +226,16 @@ class QuietProcessRunner:
         except BaseException:
             self._terminate_process(proc)
             thread.join(timeout=1)
-            progress.finish(success=False)
+            if progress is not None:
+                progress.finish(success=False)
             raise
         finally:
             if proc.stdin is not None and not proc.stdin.closed:
                 proc.stdin.close()
 
         assert return_code is not None
-        progress.finish(success=return_code == 0 and not timed_out)
+        if progress is not None:
+            progress.finish(success=return_code == 0 and not timed_out)
 
         if timed_out:
             trimmed = output.strip()
