@@ -1578,10 +1578,44 @@ def test_heartbeat_progress_uses_inline_spinner_for_tty() -> None:
     progress.finish(success=True)
 
     rendered = stream.getvalue()
-    assert "\r[tty capture] | working (0s)" in rendered
-    assert "\r[tty capture] / working (0s)" in rendered
+    assert "\r[tty capture] [=   ] working (0s)" in rendered
+    assert "\r[tty capture] [==  ] working (0s)" in rendered
     assert "\r[tty capture] done (1s)" in rendered
     assert rendered.endswith("\n")
+    assert "still working" not in rendered
+
+
+def test_heartbeat_progress_can_force_inline_updates_for_wrapped_terminals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    monkeypatch.setenv("AUDAX_FORCE_TTY", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    clock = FakeClock()
+    stream = io.StringIO()
+    progress = HeartbeatProgress(
+        "wrapped terminal",
+        interval_seconds=5.0,
+        stream=stream,
+        clock=clock,
+    )
+
+    progress.start()
+    clock.now = 0.1
+    progress.maybe_emit()
+    clock.now = 1.0
+    progress.finish(success=True)
+
+    rendered = stream.getvalue()
+    assert "\r" in rendered
+    assert "\x1b[" in rendered
     assert "still working" not in rendered
 
 
@@ -1640,6 +1674,71 @@ def test_quiet_process_runner_uses_inline_spinner_for_tty(tmp_path: Path) -> Non
     assert "\r[tty runner test]" in rendered
     assert "still working" not in rendered
     assert rendered.endswith("\n")
+
+
+def test_quiet_process_runner_redraws_inline_status_around_streamed_chunks(
+    tmp_path: Path,
+) -> None:
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stream = FakeTTY()
+    runner = QuietProcessRunner(
+        heartbeat_seconds=5.0,
+        progress_stream=stream,
+    )
+    output = runner.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, time; "
+                "sys.stdout.write('chunk one\\n'); sys.stdout.flush(); "
+                "time.sleep(0.25); "
+                "sys.stdout.write('chunk two\\n'); sys.stdout.flush()"
+            ),
+        ],
+        "streaming tty runner",
+        cwd=tmp_path,
+        on_chunk=stream.write,
+    )
+
+    rendered = stream.getvalue()
+    assert "chunk one" in output
+    assert "chunk two" in output
+    assert "chunk one" in rendered
+    assert "chunk two" in rendered
+    assert "\r[streaming tty runner]" in rendered
+    assert "still working" not in rendered
+    assert "\r " in rendered
+
+
+def test_quiet_process_runner_suppresses_repeated_line_heartbeats_while_streaming(
+    tmp_path: Path,
+) -> None:
+    stream = io.StringIO()
+    runner = QuietProcessRunner(
+        heartbeat_seconds=0.01,
+        progress_stream=stream,
+    )
+    output = runner.run(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(0.08); print('streamed output')",
+        ],
+        "streaming line runner",
+        cwd=tmp_path,
+        on_chunk=stream.write,
+    )
+
+    rendered = stream.getvalue()
+    assert "streamed output" in output
+    assert "streamed output" in rendered
+    assert "[streaming line runner] working..." in rendered
+    assert "[streaming line runner] done" in rendered
+    assert "still working" not in rendered
 
 
 def test_quiet_process_runner_interrupt_kills_process_group(
@@ -2691,6 +2790,90 @@ def test_orchestrator_streams_claude_implementer_partial_output(tmp_path: Path) 
     assert "end live output" in rendered
 
 
+def test_orchestrator_rich_live_log_distinguishes_tools_and_assistant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audax_core.ui import ANSI_PATTERN
+
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = FakeTTY()
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=FakeClaude(["done"]),
+        codex=FakeCodex([]),
+        output_stream=output,
+    )
+
+    orchestrator._stream_agent_text("Reading repository... ", label="implementation round 1")
+    orchestrator._stream_agent_text("\n[Bash] ", label="implementation round 1")
+    orchestrator._stream_agent_text(": pytest tests/test_audax.py", label="implementation round 1")
+    orchestrator._stream_agent_text("done.", label="implementation round 1")
+    orchestrator._finalize_streaming()
+
+    rendered = output.getvalue()
+    plain = ANSI_PATTERN.sub("", rendered)
+
+    assert "\x1b[" in rendered
+    assert "Claude live work log: implementation round 1" in plain
+    assert "Claude  Reading repository..." in plain
+    assert "Bash" in plain
+    assert "pytest tests/test_audax.py" in plain
+    assert "Claude  done." in plain
+
+
+def test_orchestrator_rich_live_log_renders_inline_markdown_across_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audax_core.ui import ANSI_PATTERN
+
+    class FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = FakeTTY()
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=FakeClaude(["done"]),
+        codex=FakeCodex([]),
+        output_stream=output,
+    )
+
+    orchestrator._stream_agent_text("1. **Isaac", label="implementation round 1")
+    orchestrator._stream_agent_text(
+        " Sim licensing** uses `Kit` and __assets__.",
+        label="implementation round 1",
+    )
+    orchestrator._finalize_streaming()
+
+    rendered = output.getvalue()
+    plain = ANSI_PATTERN.sub("", rendered)
+
+    assert "Claude  1. Isaac Sim licensing uses Kit and assets." in plain
+    assert "**" not in plain
+    assert "__" not in plain
+    assert "`Kit`" not in plain
+    assert "\x1b[1;38;5;252mIsaac Sim licensing\x1b[0m" in rendered
+    assert "\x1b[38;5;230;48;5;238mKit\x1b[0m" in rendered
+    assert "\x1b[1;38;5;252massets\x1b[0m" in rendered
+
+
 def test_implementation_review_parser_uses_progress_fields() -> None:
     from audax_core.reviews import parse_implementation_review
 
@@ -2798,6 +2981,16 @@ def test_render_session_header_card_uses_box_layout() -> None:
     assert "Spec rounds max: skipped" in plain
     assert "Mission approval: n/a" in plain
     assert "╭" in rendered and "╰" in rendered
+
+
+def test_supports_rich_terminal_can_be_forced_for_wrapped_terminals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from audax_core.ui import supports_rich_terminal
+
+    monkeypatch.setenv("AUDAX_FORCE_RICH_TERMINAL", "1")
+
+    assert supports_rich_terminal(io.StringIO()) is True
 
 
 def test_render_startup_card_uses_box_layout() -> None:
@@ -2934,6 +3127,54 @@ def test_startup_slash_completer_filters_command_dropdown() -> None:
     assert slash_command_suggestions("/ag", completions) == [
         ("/agents", "show Claude and Codex runtime details")
     ]
+
+
+def test_slash_menu_fragments_highlight_selected_visible_row() -> None:
+    from audax_core.ui import _render_slash_menu_fragments
+
+    suggestions = [
+        ("/agents", "show Claude and Codex runtime details"),
+        ("/mode", "set mission mode"),
+        ("/exit", "close Audax"),
+    ]
+
+    fragments = _render_slash_menu_fragments(
+        suggestions,
+        selected_index=1,
+        scroll_offset=0,
+        max_rows=3,
+    )
+    rendered = "".join(text for _, text in fragments)
+
+    assert "   /agents" in rendered
+    assert " > /mode" in rendered
+    assert "   /exit" in rendered
+
+
+def test_slash_menu_fragments_show_remaining_rows_when_scrolled() -> None:
+    from audax_core.ui import _clamp_slash_menu_state, _render_slash_menu_fragments
+
+    suggestions = [(f"/cmd-{idx}", f"command {idx}") for idx in range(5)]
+    selected_index = [4]
+    scroll_offset = [0]
+
+    _clamp_slash_menu_state(
+        suggestions,
+        selected_index,
+        scroll_offset,
+        max_rows=3,
+    )
+    fragments = _render_slash_menu_fragments(
+        suggestions,
+        selected_index=selected_index[0],
+        scroll_offset=scroll_offset[0],
+        max_rows=3,
+    )
+    rendered = "".join(text for _, text in fragments)
+
+    assert scroll_offset[0] == 2
+    assert "/cmd-0" not in rendered
+    assert " > /cmd-4" in rendered
 
 
 def test_build_repo_context_handles_symlinked_repo_root(tmp_path: Path) -> None:

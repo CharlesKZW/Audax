@@ -13,11 +13,20 @@ from typing import Callable, TextIO
 
 from .models import DEFAULT_HEARTBEAT_SECONDS
 
+_FORCE_TTY_ENV_VARS = ("AUDAX_FORCE_TTY", "AUDAX_FORCE_RICH_TERMINAL")
+
 
 class HeartbeatProgress:
     """Print sparse progress updates without streaming raw agent output."""
 
-    SPINNER_FRAMES = ("|", "/", "-", "\\")
+    SHIMMER_FRAMES = (
+        "[=   ]",
+        "[==  ]",
+        "[=== ]",
+        "[ ===]",
+        "[  ==]",
+        "[   =]",
+    )
 
     def __init__(
         self,
@@ -33,13 +42,14 @@ class HeartbeatProgress:
         self.clock = clock
         self.started_at: float | None = None
         self.last_update: float | None = None
-        self._spinner_index = 0
+        self._shimmer_index = 0
         self._last_inline_width = 0
         self._inline_updates = (
             self._supports_inline_updates(self.stream)
             if inline_updates is None
             else inline_updates
         )
+        self._color_updates = self._supports_color(self.stream)
 
     @property
     def uses_inline_updates(self) -> bool:
@@ -53,6 +63,9 @@ class HeartbeatProgress:
         if self._inline_updates:
             self._write_inline(self._working_message())
             return
+        if self._color_updates:
+            self._write(self._working_message())
+            return
         self._write(f"[{self.label}] working...")
 
     def maybe_emit(self) -> None:
@@ -61,29 +74,59 @@ class HeartbeatProgress:
         now = self.clock()
         if self._inline_updates:
             self.last_update = now
-            self._spinner_index = (self._spinner_index + 1) % len(self.SPINNER_FRAMES)
+            self._advance_shimmer()
             self._write_inline(self._working_message())
             return
         if self.interval_seconds and (now - self.last_update) >= self.interval_seconds:
             self.last_update = now
-            self._write(f"[{self.label}] still working ({int(now - self.started_at)}s elapsed)")
+            self._advance_shimmer()
+            if self._color_updates:
+                self._write(
+                    self._working_message(action="still working", elapsed_suffix=" elapsed")
+                )
+            else:
+                self._write(
+                    f"[{self.label}] still working ({int(now - self.started_at)}s elapsed)"
+                )
 
     def finish(self, success: bool) -> None:
         if self.started_at is None:
             return
         status = "done" if success else "failed"
         elapsed = int(self.clock() - self.started_at)
+        message = f"[{self.label}] {status} ({elapsed}s)"
+        if self._color_updates:
+            status_code = "1;38;5;82" if success else "1;38;5;203"
+            message = (
+                f"{self._style(f'[{self.label}]', '1;38;5;117')} "
+                f"{self._style(status, status_code)} "
+                f"{self._style(f'({elapsed}s)', '38;5;244')}"
+            )
         if self._inline_updates:
-            self._write_inline(f"[{self.label}] {status} ({elapsed}s)", final=True)
+            self._write_inline(message, final=True)
             return
-        self._write(f"[{self.label}] {status} ({elapsed}s)")
+        self._write(message)
 
-    def _working_message(self) -> str:
+    def _working_message(
+        self,
+        *,
+        action: str = "working",
+        elapsed_suffix: str = "",
+    ) -> str:
         """Render the current in-progress status message."""
         assert self.started_at is not None
         elapsed = int(self.clock() - self.started_at)
-        frame = self.SPINNER_FRAMES[self._spinner_index]
-        return f"[{self.label}] {frame} working ({elapsed}s)"
+        frame = self.SHIMMER_FRAMES[self._shimmer_index]
+        if not self._color_updates:
+            return f"[{self.label}] {frame} {action} ({elapsed}s{elapsed_suffix})"
+        label = self._style(f"[{self.label}]", "38;5;117")
+        shimmer = self._style(frame, "38;5;45")
+        action_text = self._style(action, "38;5;252")
+        elapsed_text = self._style(f"({elapsed}s{elapsed_suffix})", "38;5;244")
+        return f"{label} {shimmer} {action_text} {elapsed_text}"
+
+    def _advance_shimmer(self) -> None:
+        self._shimmer_index = (self._shimmer_index + 1) % len(self.SHIMMER_FRAMES)
 
     def _write(self, message: str) -> None:
         self.stream.write(f"{message}\n")
@@ -102,9 +145,26 @@ class HeartbeatProgress:
             self._last_inline_width = len(message)
         self.stream.flush()
 
+    def clear_inline(self) -> None:
+        """Clear the current inline status before another writer emits output."""
+        if not self._inline_updates or not self._last_inline_width:
+            return
+        self.stream.write("\r")
+        self.stream.write(" " * self._last_inline_width)
+        self.stream.write("\r")
+        self.stream.flush()
+
+    def redraw_inline(self) -> None:
+        """Redraw the current inline status after another writer emits output."""
+        if not self._inline_updates or self.started_at is None:
+            return
+        self._write_inline(self._working_message())
+
     @staticmethod
     def _supports_inline_updates(stream: TextIO) -> bool:
         """Return whether a stream supports carriage-return style updates."""
+        if _force_tty_output():
+            return True
         isatty = getattr(stream, "isatty", None)
         if not callable(isatty):
             return False
@@ -112,6 +172,31 @@ class HeartbeatProgress:
             return bool(isatty())
         except OSError:
             return False
+
+    @staticmethod
+    def _supports_color(stream: TextIO) -> bool:
+        """Return whether a stream should receive ANSI-colored progress output."""
+        if os.environ.get("NO_COLOR") is not None:
+            return False
+        if os.environ.get("TERM", "").lower() == "dumb" and not _force_tty_output():
+            return False
+        return HeartbeatProgress._supports_inline_updates(stream)
+
+    @staticmethod
+    def _style(text: str, code: str) -> str:
+        return f"\033[{code}m{text}\033[0m"
+
+
+def _force_tty_output() -> bool:
+    """Return whether Audax should trust terminal control even if isatty is false."""
+    return any(_truthy_env(name) for name in _FORCE_TTY_ENV_VARS)
+
+
+def _truthy_env(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
 class QuietProcessRunner:
@@ -145,8 +230,8 @@ class QuietProcessRunner:
 
         ``on_chunk`` receives each raw stdout chunk as it arrives, in the
         background drain thread; callers use it to stream partial output to
-        the user. ``disable_heartbeat`` suppresses the spinner so the streamed
-        output is not clobbered by carriage-return updates.
+        the user. When the progress stream is a TTY, inline heartbeats are
+        cleared before streamed output and redrawn afterward.
         """
         proc = subprocess.Popen(
             cmd,
@@ -161,6 +246,23 @@ class QuietProcessRunner:
 
         chunks: list[str] = []
         read_errors: list[BaseException] = []
+        output_lock = threading.RLock()
+        progress: HeartbeatProgress | None = None
+
+        if not disable_heartbeat:
+            supports_inline = HeartbeatProgress._supports_inline_updates(
+                self.progress_stream
+            )
+            interval_seconds = self.heartbeat_seconds
+            if on_chunk is not None and not supports_inline:
+                interval_seconds = 0
+            progress = HeartbeatProgress(
+                label=label,
+                interval_seconds=interval_seconds,
+                stream=self.progress_stream,
+            )
+            with output_lock:
+                progress.start()
 
         def drain_stdout() -> None:
             try:
@@ -172,7 +274,12 @@ class QuietProcessRunner:
                     chunks.append(chunk)
                     if on_chunk is not None:
                         try:
-                            on_chunk(chunk)
+                            with output_lock:
+                                if progress is not None and progress.uses_inline_updates:
+                                    progress.clear_inline()
+                                on_chunk(chunk)
+                                if progress is not None and progress.uses_inline_updates:
+                                    progress.redraw_inline()
                         except BaseException:
                             # Never let a callback failure break the drain.
                             pass
@@ -185,15 +292,6 @@ class QuietProcessRunner:
         thread = threading.Thread(target=drain_stdout, daemon=True)
         thread.start()
 
-        progress: HeartbeatProgress | None = None
-        if not disable_heartbeat:
-            progress = HeartbeatProgress(
-                label=label,
-                interval_seconds=self.heartbeat_seconds,
-                stream=self.progress_stream,
-                inline_updates=False if on_chunk is not None else None,
-            )
-            progress.start()
         started_at = time.monotonic()
         timed_out = False
         return_code: int | None = None
@@ -214,7 +312,8 @@ class QuietProcessRunner:
             while proc.poll() is None:
                 time.sleep(sleep_seconds)
                 if progress is not None:
-                    progress.maybe_emit()
+                    with output_lock:
+                        progress.maybe_emit()
                 if self.subprocess_timeout_seconds is not None:
                     elapsed = time.monotonic() - started_at
                     if elapsed >= self.subprocess_timeout_seconds:
@@ -233,7 +332,8 @@ class QuietProcessRunner:
             self._terminate_process(proc)
             thread.join(timeout=1)
             if progress is not None:
-                progress.finish(success=False)
+                with output_lock:
+                    progress.finish(success=False)
             raise
         finally:
             if proc.stdin is not None and not proc.stdin.closed:
@@ -241,7 +341,8 @@ class QuietProcessRunner:
 
         assert return_code is not None
         if progress is not None:
-            progress.finish(success=return_code == 0 and not timed_out)
+            with output_lock:
+                progress.finish(success=return_code == 0 and not timed_out)
 
         if timed_out:
             trimmed = output.strip()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Callable, TextIO
 
@@ -51,11 +52,20 @@ from .reviews import (
     render_review_feedback,
 )
 from .ui import (
+    live_log_assistant_prefix,
     render_implementer_round_box,
+    render_live_log_footer,
+    render_live_log_header,
+    render_live_log_tool_start,
     render_reviewer_and_progress_boxes,
     render_session_header_card,
+    split_live_log_inline_markdown,
+    style_live_log_assistant_text,
+    style_live_log_tool_detail,
     supports_rich_terminal,
 )
+
+_CLAUDE_TOOL_START_PATTERN = re.compile(r"^\n\[(?P<name>[^\]\n]+)\]\s*")
 
 
 class ReviewLoopOrchestrator:
@@ -103,6 +113,10 @@ class ReviewLoopOrchestrator:
         self._latest_mission_spec_review_summary = ""
         self._latest_mission_spec_review_feedback = ""
         self._streaming_active = False
+        self._streaming_rich = False
+        self._streaming_assistant_prefix_pending = True
+        self._streaming_assistant_markdown_buffer = ""
+        self._streaming_tool_line_active = False
         self.artifacts.ensure_directories()
 
     def run(self, task: str) -> RunSummary:
@@ -786,12 +800,14 @@ class ReviewLoopOrchestrator:
         """Stream a chunk of agent text to the output stream."""
         if not self._streaming_active:
             self._streaming_active = True
+            self._streaming_rich = supports_rich_terminal(self.output_stream)
+            self._streaming_assistant_prefix_pending = True
+            self._streaming_assistant_markdown_buffer = ""
+            self._streaming_tool_line_active = False
             self.output_stream.write(
-                "\n"
-                f"  ── Claude live work log: {label} ─────────────────────\n"
-                "  Ctrl-C stops the current Audax run; use `continue` to resume from a locked mission.\n"
+                render_live_log_header(label, rich=self._streaming_rich)
             )
-        self.output_stream.write(text)
+        self.output_stream.write(self._format_stream_agent_text(text))
         self.output_stream.flush()
 
     def _finalize_streaming(self) -> None:
@@ -799,8 +815,79 @@ class ReviewLoopOrchestrator:
         if not self._streaming_active:
             return
         self._streaming_active = False
-        self.output_stream.write("\n  ── end live output ────────────────────────\n")
+        self.output_stream.write(self._flush_assistant_markdown_buffer())
+        self.output_stream.write(render_live_log_footer(rich=self._streaming_rich))
         self.output_stream.flush()
+
+    def _format_stream_agent_text(self, text: str) -> str:
+        """Apply live-log styling to Claude assistant and tool chunks."""
+        if not self._streaming_rich:
+            return text
+
+        tool_match = _CLAUDE_TOOL_START_PATTERN.match(text)
+        if tool_match is not None:
+            flushed = self._flush_assistant_markdown_buffer()
+            self._streaming_tool_line_active = True
+            self._streaming_assistant_prefix_pending = True
+            name = tool_match.group("name")
+            remainder = text[tool_match.end() :]
+            rendered = flushed + render_live_log_tool_start(name, rich=True)
+            if remainder:
+                rendered += self._format_stream_agent_text(remainder)
+            return rendered
+
+        if self._streaming_tool_line_active and text.startswith(":"):
+            detail = text[1:].lstrip()
+            self._streaming_tool_line_active = False
+            return style_live_log_tool_detail(detail, rich=True) + "\n"
+
+        if self._streaming_tool_line_active:
+            self._streaming_tool_line_active = False
+            separator = "" if text.startswith("\n") else "\n"
+            return separator + self._format_assistant_text(text)
+
+        return self._format_assistant_text(text)
+
+    def _format_assistant_text(self, text: str) -> str:
+        """Style assistant prose while keeping one Claude gutter per visible line."""
+        rendered: list[str] = []
+        for idx, part in enumerate(text.split("\n")):
+            if idx > 0:
+                rendered.append(self._flush_assistant_markdown_buffer())
+                rendered.append("\n")
+                self._streaming_assistant_prefix_pending = True
+            if not part:
+                continue
+            candidate = self._streaming_assistant_markdown_buffer + part
+            safe, remainder = split_live_log_inline_markdown(candidate)
+            self._streaming_assistant_markdown_buffer = remainder
+            if not safe:
+                continue
+            rendered.append(self._format_assistant_safe_text(safe))
+        return "".join(rendered)
+
+    def _flush_assistant_markdown_buffer(self) -> str:
+        """Render any assistant text held for cross-chunk Markdown spans."""
+        if not self._streaming_assistant_markdown_buffer:
+            return ""
+        text = self._streaming_assistant_markdown_buffer
+        self._streaming_assistant_markdown_buffer = ""
+        return self._format_assistant_safe_text(text)
+
+    def _format_assistant_safe_text(self, text: str) -> str:
+        """Style assistant text known not to end inside an inline Markdown span."""
+        rendered: list[str] = []
+        for idx, part in enumerate(text.split("\n")):
+            if idx > 0:
+                rendered.append("\n")
+                self._streaming_assistant_prefix_pending = True
+            if not part:
+                continue
+            if self._streaming_assistant_prefix_pending:
+                rendered.append(live_log_assistant_prefix(rich=True))
+                self._streaming_assistant_prefix_pending = False
+            rendered.append(style_live_log_assistant_text(part, rich=True))
+        return "".join(rendered)
 
     def _lock_current_contract(
         self,

@@ -39,6 +39,15 @@ BAR_FILLED_ANSI = "38;5;82"
 BAR_EMPTY_ANSI = "38;5;238"
 PROGRESS_BAR_WIDTH = 30
 ISSUE_DETAIL_MAX_LINES = 3
+SLASH_MENU_MAX_ROWS = 12
+LIVE_LOG_RULE_ANSI = "38;5;60"
+LIVE_LOG_TITLE_ANSI = "1;38;5;208"
+LIVE_LOG_MUTED_ANSI = "38;5;244"
+LIVE_LOG_ASSISTANT_LABEL_ANSI = "1;38;5;208"
+LIVE_LOG_ASSISTANT_TEXT_ANSI = "38;5;252"
+LIVE_LOG_INLINE_CODE_ANSI = "38;5;230;48;5;238"
+LIVE_LOG_TOOL_LABEL_ANSI = "1;38;5;16;48;5;117"
+LIVE_LOG_TOOL_DETAIL_ANSI = "38;5;250"
 
 _SECTION_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*$")
 _BULLET_PATTERN = re.compile(r"^\s*[-*+]\s+(.+?)\s*$")
@@ -47,12 +56,16 @@ _LEADING_NUMBER_PATTERN = re.compile(r"^\s*\d+[.)]?\s+")
 _INLINE_CODE_PATTERN = re.compile(r"`([^`\n]+)`")
 _INLINE_BOLD_ASTERISK_PATTERN = re.compile(r"\*\*([^*\n]+?)\*\*")
 _INLINE_BOLD_UNDERSCORE_PATTERN = re.compile(r"__([^_\n]+?)__")
+_INLINE_MARKDOWN_PATTERN = re.compile(
+    r"`([^`\n]+)`|\*\*([^*\n]+?)\*\*|__([^_\n]+?)__"
+)
 INLINE_CODE_ANSI = "38;5;213"
 INLINE_BOLD_ANSI = "1"
 INPUT_BOX_BG = "#232a31"
 INPUT_BOX_FG = "#f4f4f5"
 INPUT_BOX_PROMPT_FG = "#e5e7eb"
 INPUT_BOX_BORDER_FG = "#5c6773"
+_FORCE_RICH_ENV_VARS = ("AUDAX_FORCE_TTY", "AUDAX_FORCE_RICH_TERMINAL")
 
 
 def _strip_leading_number(item: str) -> str:
@@ -93,6 +106,8 @@ def _strip_inline_markdown(text: str) -> str:
 
 def supports_rich_terminal(stream: TextIO) -> bool:
     """Return whether a stream supports the richer card-style terminal UI."""
+    if _force_rich_terminal():
+        return True
     isatty = getattr(stream, "isatty", None)
     if not callable(isatty):
         return False
@@ -102,6 +117,18 @@ def supports_rich_terminal(stream: TextIO) -> bool:
     except OSError:
         return False
     return os.environ.get("TERM", "").lower() != "dumb"
+
+
+def _force_rich_terminal() -> bool:
+    """Return whether rich terminal rendering was explicitly requested."""
+    return any(_truthy_env(name) for name in _FORCE_RICH_ENV_VARS)
+
+
+def _truthy_env(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
 def render_startup_card(stream: TextIO, info_lines: list[str] | None = None) -> str:
@@ -197,26 +224,79 @@ def read_task_interactive(
     bindings = KeyBindings()
     completion_map = slash_command_completions or slash_commands or {}
     normalized_completions = _normalize_slash_commands(completion_map)
+    slash_selected_index = [0]
+    slash_scroll_offset = [0]
+    slash_last_token: list[str | None] = [None]
 
     def current_slash_suggestions() -> list[tuple[str, str]]:
-        return slash_command_suggestions(
-            buffer.document.current_line_before_cursor,
-            normalized_completions,
+        before_cursor = buffer.document.current_line_before_cursor
+        stripped = before_cursor.lstrip()
+        token = stripped.split(maxsplit=1)[0] if stripped.startswith("/") else None
+        suggestions = slash_command_suggestions(before_cursor, normalized_completions)
+        if token != slash_last_token[0]:
+            slash_selected_index[0] = 0
+            slash_scroll_offset[0] = 0
+            slash_last_token[0] = token
+        _clamp_slash_menu_state(
+            suggestions,
+            slash_selected_index,
+            slash_scroll_offset,
         )
+        return suggestions
+
+    def complete_selected_slash_command(event) -> bool:
+        suggestions = current_slash_suggestions()
+        if not suggestions:
+            return False
+        command = suggestions[slash_selected_index[0]][0]
+        before_cursor = event.current_buffer.document.current_line_before_cursor
+        token = before_cursor.lstrip().split(maxsplit=1)[0]
+        event.current_buffer.delete_before_cursor(len(token))
+        event.current_buffer.insert_text(command)
+        slash_selected_index[0] = 0
+        slash_scroll_offset[0] = 0
+        slash_last_token[0] = command
+        return True
 
     @bindings.add("enter")
     def _submit(event) -> None:
+        if complete_selected_slash_command(event):
+            return
         event.app.exit(result=event.current_buffer.text)
 
     @bindings.add("tab")
     def _complete_slash_command(event) -> None:
+        if not complete_selected_slash_command(event):
+            event.current_buffer.insert_text("\t")
+
+    @bindings.add("down", filter=Condition(lambda: bool(current_slash_suggestions())))
+    def _select_next_slash_command(event) -> None:
         suggestions = current_slash_suggestions()
         if not suggestions:
-            event.current_buffer.insert_text("\t")
             return
-        token = event.current_buffer.document.current_line_before_cursor.lstrip().split(maxsplit=1)[0]
-        event.current_buffer.delete_before_cursor(len(token))
-        event.current_buffer.insert_text(suggestions[0][0])
+        slash_selected_index[0] = min(
+            len(suggestions) - 1,
+            slash_selected_index[0] + 1,
+        )
+        _clamp_slash_menu_state(
+            suggestions,
+            slash_selected_index,
+            slash_scroll_offset,
+        )
+        event.app.invalidate()
+
+    @bindings.add("up", filter=Condition(lambda: bool(current_slash_suggestions())))
+    def _select_previous_slash_command(event) -> None:
+        suggestions = current_slash_suggestions()
+        if not suggestions:
+            return
+        slash_selected_index[0] = max(0, slash_selected_index[0] - 1)
+        _clamp_slash_menu_state(
+            suggestions,
+            slash_selected_index,
+            slash_scroll_offset,
+        )
+        event.app.invalidate()
 
     @bindings.add("escape", "enter")
     def _newline(event) -> None:
@@ -252,9 +332,13 @@ def read_task_interactive(
             ConditionalContainer(
                 content=Window(
                     content=FormattedTextControl(
-                        lambda: _render_slash_menu_fragments(current_slash_suggestions())
+                        lambda: _render_slash_menu_fragments(
+                            current_slash_suggestions(),
+                            selected_index=slash_selected_index[0],
+                            scroll_offset=slash_scroll_offset[0],
+                        )
                     ),
-                    height=Dimension(min=1, max=12),
+                    height=Dimension(min=1, max=SLASH_MENU_MAX_ROWS),
                     style="class:slash-menu",
                     dont_extend_height=True,
                 ),
@@ -367,25 +451,65 @@ def _normalize_slash_commands(commands: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _render_slash_menu_fragments(suggestions: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def _clamp_slash_menu_state(
+    suggestions: list[tuple[str, str]],
+    selected_index: list[int],
+    scroll_offset: list[int],
+    *,
+    max_rows: int = SLASH_MENU_MAX_ROWS,
+) -> None:
+    """Keep the highlighted slash-menu row visible."""
+    if not suggestions:
+        selected_index[0] = 0
+        scroll_offset[0] = 0
+        return
+    selected_index[0] = max(0, min(selected_index[0], len(suggestions) - 1))
+    if selected_index[0] < scroll_offset[0]:
+        scroll_offset[0] = selected_index[0]
+    visible_end = scroll_offset[0] + max_rows
+    if selected_index[0] >= visible_end:
+        scroll_offset[0] = selected_index[0] - max_rows + 1
+    scroll_offset[0] = max(0, min(scroll_offset[0], max(0, len(suggestions) - max_rows)))
+
+
+def _render_slash_menu_fragments(
+    suggestions: list[tuple[str, str]],
+    *,
+    selected_index: int = 0,
+    scroll_offset: int = 0,
+    max_rows: int = SLASH_MENU_MAX_ROWS,
+) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
-    for idx, (command, description) in enumerate(suggestions[:12]):
-        command_style = "class:slash-menu.command.current" if idx == 0 else "class:slash-menu.command"
-        meta_style = "class:slash-menu.meta.current" if idx == 0 else "class:slash-menu.meta"
-        row_style = "class:slash-menu.current" if idx == 0 else "class:slash-menu"
+    visible = suggestions[scroll_offset : scroll_offset + max_rows]
+    for visible_idx, (command, description) in enumerate(visible):
+        idx = scroll_offset + visible_idx
+        is_current = idx == selected_index
+        command_style = (
+            "class:slash-menu.command.current"
+            if is_current
+            else "class:slash-menu.command"
+        )
+        meta_style = (
+            "class:slash-menu.meta.current"
+            if is_current
+            else "class:slash-menu.meta"
+        )
+        row_style = "class:slash-menu.current" if is_current else "class:slash-menu"
+        marker = ">" if is_current else " "
         rows.extend(
             [
-                (row_style, "  "),
+                (row_style, f" {marker} "),
                 (command_style, f"{command:<26}"),
                 (meta_style, description),
                 (row_style, "\n"),
             ]
         )
-    if len(suggestions) > 12:
+    remaining = len(suggestions) - (scroll_offset + len(visible))
+    if remaining > 0:
         rows.extend(
             [
                 ("class:slash-menu", "  "),
-                ("class:slash-menu.meta", f"+ {len(suggestions) - 12} more"),
+                ("class:slash-menu.meta", f"+ {remaining} more"),
             ]
         )
     elif rows:
@@ -518,6 +642,138 @@ def render_session_header_card(task: str, config: LoopConfig, stream: TextIO) ->
         content_width=content_width,
         color=color,
     )
+
+
+def render_live_log_header(label: str, *, rich: bool) -> str:
+    """Render the header for Claude's streamed work log."""
+    if not rich:
+        return (
+            "\n"
+            f"  ── Claude live work log: {label} ─────────────────────\n"
+            "  Ctrl-C stops the current Audax run; use `continue` to resume from a locked mission.\n"
+        )
+
+    total_width = _card_width()
+    title = f" Claude live work log: {label} "
+    rule_width = max(8, total_width - _display_width(title) - 8)
+    top = (
+        "  "
+        + _style("╭─", LIVE_LOG_RULE_ANSI, color=True)
+        + _style(title, LIVE_LOG_TITLE_ANSI, color=True)
+        + _style("─" * rule_width + "╮", LIVE_LOG_RULE_ANSI, color=True)
+    )
+    hint = (
+        "  "
+        + _style("│", LIVE_LOG_RULE_ANSI, color=True)
+        + " "
+        + _style(
+            "Ctrl-C stops the current Audax run; use `continue` to resume from a locked mission.",
+            LIVE_LOG_MUTED_ANSI,
+            color=True,
+        )
+    )
+    return f"\n{top}\n{hint}\n"
+
+
+def render_live_log_footer(*, rich: bool) -> str:
+    """Render the footer for Claude's streamed work log."""
+    if not rich:
+        return "\n  ── end live output ────────────────────────\n"
+    total_width = _card_width()
+    title = " end live output "
+    rule_width = max(8, total_width - _display_width(title) - 8)
+    return (
+        "\n  "
+        + _style("╰─", LIVE_LOG_RULE_ANSI, color=True)
+        + _style(title, LIVE_LOG_MUTED_ANSI, color=True)
+        + _style("─" * rule_width + "╯", LIVE_LOG_RULE_ANSI, color=True)
+        + "\n"
+    )
+
+
+def live_log_assistant_prefix(*, rich: bool) -> str:
+    """Return the left gutter for streamed assistant text."""
+    if not rich:
+        return ""
+    return (
+        "  "
+        + _style("Claude", LIVE_LOG_ASSISTANT_LABEL_ANSI, color=True)
+        + "  "
+    )
+
+
+def style_live_log_assistant_text(text: str, *, rich: bool) -> str:
+    """Style streamed assistant prose."""
+    if not rich:
+        return _strip_inline_markdown(text)
+    return _render_live_log_inline_markdown(text)
+
+
+def split_live_log_inline_markdown(text: str) -> tuple[str, str]:
+    """Split ``text`` into a safe prefix and a trailing incomplete inline span."""
+    idx = 0
+    while idx < len(text):
+        if text[idx] == "`":
+            end = text.find("`", idx + 1)
+            newline = text.find("\n", idx + 1)
+            if end == -1 or (newline != -1 and newline < end):
+                return text[:idx], text[idx:]
+            idx = end + 1
+            continue
+        if text.startswith("**", idx):
+            end = text.find("**", idx + 2)
+            newline = text.find("\n", idx + 2)
+            if end == -1 or (newline != -1 and newline < end):
+                return text[:idx], text[idx:]
+            idx = end + 2
+            continue
+        if text.startswith("__", idx):
+            end = text.find("__", idx + 2)
+            newline = text.find("\n", idx + 2)
+            if end == -1 or (newline != -1 and newline < end):
+                return text[:idx], text[idx:]
+            idx = end + 2
+            continue
+        idx += 1
+    return text, ""
+
+
+def _render_live_log_inline_markdown(text: str) -> str:
+    """Render assistant prose with live-log base, bold, and code styles."""
+    rendered: list[str] = []
+    last = 0
+    for match in _INLINE_MARKDOWN_PATTERN.finditer(text):
+        if match.start() > last:
+            rendered.append(
+                _style(text[last : match.start()], LIVE_LOG_ASSISTANT_TEXT_ANSI, color=True)
+            )
+        code = match.group(1)
+        bold = match.group(2) or match.group(3)
+        if code is not None:
+            rendered.append(_style(code, LIVE_LOG_INLINE_CODE_ANSI, color=True))
+        else:
+            rendered.append(
+                _style(bold, f"1;{LIVE_LOG_ASSISTANT_TEXT_ANSI}", color=True)
+            )
+        last = match.end()
+    if last < len(text):
+        rendered.append(_style(text[last:], LIVE_LOG_ASSISTANT_TEXT_ANSI, color=True))
+    return "".join(rendered)
+
+
+def render_live_log_tool_start(name: str, *, rich: bool) -> str:
+    """Render the left gutter for a Claude tool-use line."""
+    if not rich:
+        return f"\n[{name}] "
+    badge = _style(f" {name} ", LIVE_LOG_TOOL_LABEL_ANSI, color=True)
+    return f"\n  {badge} "
+
+
+def style_live_log_tool_detail(text: str, *, rich: bool) -> str:
+    """Style a one-line Claude tool-use summary."""
+    if not rich:
+        return text
+    return _style(text, LIVE_LOG_TOOL_DETAIL_ANSI, color=True)
 
 
 def _card_width() -> int:
