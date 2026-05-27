@@ -39,6 +39,7 @@ from audax_core.app import (
     build_startup_card_info_lines,
     build_startup_slash_command_completions,
     build_startup_slash_command_handler,
+    build_startup_slash_command_options,
     continue_main,
     main,
     parse_args,
@@ -3127,6 +3128,11 @@ def test_startup_slash_completer_filters_command_dropdown() -> None:
     assert slash_command_suggestions("/ag", completions) == [
         ("/agents", "show Claude and Codex runtime details")
     ]
+    assert build_startup_slash_command_options()["/auto-commit"] == ("on", "off")
+    assert build_startup_slash_command_options()["/mode"] == (
+        "direct",
+        "mission-spec",
+    )
 
 
 def test_slash_menu_fragments_highlight_selected_visible_row() -> None:
@@ -3149,6 +3155,59 @@ def test_slash_menu_fragments_highlight_selected_visible_row() -> None:
     assert "   /agents" in rendered
     assert " > /mode" in rendered
     assert "   /exit" in rendered
+
+
+def test_slash_menu_fragments_render_selectable_command_options() -> None:
+    from audax_core.ui import (
+        _advance_slash_option,
+        _normalize_slash_command_options,
+        _render_slash_menu_fragments,
+        _slash_completion_text,
+    )
+
+    suggestions = [
+        ("/agents", "show Claude and Codex runtime details"),
+        ("/auto-commit", "toggle or set auto-commit"),
+        ("/mode", "set mission mode"),
+    ]
+    command_options = _normalize_slash_command_options(
+        {
+            "/auto-commit": ("on", "off"),
+            "/mode": ("direct", "mission-spec"),
+        }
+    )
+    option_indexes = {"/auto-commit": 1}
+
+    fragments = _render_slash_menu_fragments(
+        suggestions,
+        selected_index=1,
+        scroll_offset=0,
+        max_rows=3,
+        command_options=command_options,
+        option_indexes=option_indexes,
+    )
+    rendered = "".join(text for _, text in fragments)
+
+    assert " > /auto-commit" in rendered
+    assert " on " in rendered
+    assert "<off>" in rendered
+    assert _slash_completion_text(
+        "/auto-commit",
+        option_indexes=option_indexes,
+        command_options=command_options,
+    ) == "/auto-commit off"
+
+    _advance_slash_option(
+        "/auto-commit",
+        option_indexes=option_indexes,
+        command_options=command_options,
+        delta=1,
+    )
+    assert _slash_completion_text(
+        "/auto-commit",
+        option_indexes=option_indexes,
+        command_options=command_options,
+    ) == "/auto-commit on"
 
 
 def test_slash_menu_fragments_show_remaining_rows_when_scrolled() -> None:

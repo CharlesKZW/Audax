@@ -346,6 +346,20 @@ def build_startup_slash_command_completions() -> dict[str, str]:
     }
 
 
+def build_startup_slash_command_options() -> dict[str, tuple[str, ...]]:
+    """Return finite option sets for startup slash commands."""
+    bool_options = ("on", "off")
+    return {
+        "/mode": ("direct", "mission-spec"),
+        "/require-approval": bool_options,
+        "/approval": bool_options,
+        "/auto-commit": bool_options,
+        "/commit": bool_options,
+        "/session-branch": bool_options,
+        "/branch": bool_options,
+    }
+
+
 def build_startup_slash_command_handler(
     args: argparse.Namespace,
     *,
@@ -645,6 +659,7 @@ def read_task(args: argparse.Namespace) -> str:
     if interactive:
         return read_task_interactive(
             slash_command_completions=build_startup_slash_command_completions(),
+            slash_command_options=build_startup_slash_command_options(),
             slash_command_handler=build_startup_slash_command_handler(
                 args,
                 stream=sys.stdout,

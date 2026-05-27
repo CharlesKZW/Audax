@@ -13,6 +13,7 @@
       build_startup_flag_info_lines
       build_startup_slash_command_completions
       build_startup_slash_command_handler
+      build_startup_slash_command_options
       continue_main
       ensure_cli_available
       forward_termination_signals

@@ -8,7 +8,7 @@ import re
 import shutil
 import sys
 import textwrap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 import unicodedata
 
@@ -198,6 +198,7 @@ def read_task_interactive(
     *,
     slash_commands: Mapping[str, str] | None = None,
     slash_command_completions: Mapping[str, str] | None = None,
+    slash_command_options: Mapping[str, Sequence[str]] | None = None,
     slash_command_handler: Callable[[str], str | None] | None = None,
     stream: TextIO | None = None,
 ) -> str:
@@ -224,8 +225,10 @@ def read_task_interactive(
     bindings = KeyBindings()
     completion_map = slash_command_completions or slash_commands or {}
     normalized_completions = _normalize_slash_commands(completion_map)
+    normalized_options = _normalize_slash_command_options(slash_command_options or {})
     slash_selected_index = [0]
     slash_scroll_offset = [0]
+    slash_option_indexes: dict[str, int] = {}
     slash_last_token: list[str | None] = [None]
 
     def current_slash_suggestions() -> list[tuple[str, str]]:
@@ -244,23 +247,38 @@ def read_task_interactive(
         )
         return suggestions
 
-    def complete_selected_slash_command(event) -> bool:
+    def complete_selected_slash_command(event, *, submit_option: bool = False) -> bool:
         suggestions = current_slash_suggestions()
         if not suggestions:
             return False
         command = suggestions[slash_selected_index[0]][0]
+        replacement = _slash_completion_text(
+            command,
+            option_indexes=slash_option_indexes,
+            command_options=normalized_options,
+        )
+        if submit_option and command in normalized_options:
+            event.app.exit(result=replacement)
+            return True
         before_cursor = event.current_buffer.document.current_line_before_cursor
         token = before_cursor.lstrip().split(maxsplit=1)[0]
         event.current_buffer.delete_before_cursor(len(token))
-        event.current_buffer.insert_text(command)
+        event.current_buffer.insert_text(replacement)
         slash_selected_index[0] = 0
         slash_scroll_offset[0] = 0
-        slash_last_token[0] = command
+        slash_last_token[0] = replacement
         return True
+
+    def current_selected_slash_options() -> tuple[str, ...]:
+        suggestions = current_slash_suggestions()
+        if not suggestions:
+            return ()
+        command = suggestions[slash_selected_index[0]][0]
+        return normalized_options.get(command, ())
 
     @bindings.add("enter")
     def _submit(event) -> None:
-        if complete_selected_slash_command(event):
+        if complete_selected_slash_command(event, submit_option=True):
             return
         event.app.exit(result=event.current_buffer.text)
 
@@ -295,6 +313,34 @@ def read_task_interactive(
             suggestions,
             slash_selected_index,
             slash_scroll_offset,
+        )
+        event.app.invalidate()
+
+    @bindings.add("right", filter=Condition(lambda: bool(current_selected_slash_options())))
+    def _select_next_slash_option(event) -> None:
+        suggestions = current_slash_suggestions()
+        if not suggestions:
+            return
+        command = suggestions[slash_selected_index[0]][0]
+        _advance_slash_option(
+            command,
+            option_indexes=slash_option_indexes,
+            command_options=normalized_options,
+            delta=1,
+        )
+        event.app.invalidate()
+
+    @bindings.add("left", filter=Condition(lambda: bool(current_selected_slash_options())))
+    def _select_previous_slash_option(event) -> None:
+        suggestions = current_slash_suggestions()
+        if not suggestions:
+            return
+        command = suggestions[slash_selected_index[0]][0]
+        _advance_slash_option(
+            command,
+            option_indexes=slash_option_indexes,
+            command_options=normalized_options,
+            delta=-1,
         )
         event.app.invalidate()
 
@@ -336,6 +382,8 @@ def read_task_interactive(
                             current_slash_suggestions(),
                             selected_index=slash_selected_index[0],
                             scroll_offset=slash_scroll_offset[0],
+                            command_options=normalized_options,
+                            option_indexes=slash_option_indexes,
                         )
                     ),
                     height=Dimension(min=1, max=SLASH_MENU_MAX_ROWS),
@@ -451,6 +499,43 @@ def _normalize_slash_commands(commands: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _normalize_slash_command_options(
+    command_options: Mapping[str, Sequence[str]],
+) -> dict[str, tuple[str, ...]]:
+    return {
+        command.lower(): tuple(str(option) for option in options if str(option).strip())
+        for command, options in command_options.items()
+        if command.startswith("/") and options
+    }
+
+
+def _slash_completion_text(
+    command: str,
+    *,
+    option_indexes: Mapping[str, int],
+    command_options: Mapping[str, tuple[str, ...]],
+) -> str:
+    options = command_options.get(command, ())
+    if not options:
+        return command
+    idx = max(0, min(option_indexes.get(command, 0), len(options) - 1))
+    return f"{command} {options[idx]}"
+
+
+def _advance_slash_option(
+    command: str,
+    *,
+    option_indexes: dict[str, int],
+    command_options: Mapping[str, tuple[str, ...]],
+    delta: int,
+) -> None:
+    options = command_options.get(command, ())
+    if not options:
+        return
+    current = option_indexes.get(command, 0)
+    option_indexes[command] = (current + delta) % len(options)
+
+
 def _clamp_slash_menu_state(
     suggestions: list[tuple[str, str]],
     selected_index: list[int],
@@ -478,8 +563,12 @@ def _render_slash_menu_fragments(
     selected_index: int = 0,
     scroll_offset: int = 0,
     max_rows: int = SLASH_MENU_MAX_ROWS,
+    command_options: Mapping[str, tuple[str, ...]] | None = None,
+    option_indexes: Mapping[str, int] | None = None,
 ) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
+    command_options = command_options or {}
+    option_indexes = option_indexes or {}
     visible = suggestions[scroll_offset : scroll_offset + max_rows]
     for visible_idx, (command, description) in enumerate(visible):
         idx = scroll_offset + visible_idx
@@ -501,9 +590,17 @@ def _render_slash_menu_fragments(
                 (row_style, f" {marker} "),
                 (command_style, f"{command:<26}"),
                 (meta_style, description),
-                (row_style, "\n"),
             ]
         )
+        rows.extend(
+            _render_slash_option_fragments(
+                command,
+                command_options=command_options,
+                option_indexes=option_indexes,
+                current=is_current,
+            )
+        )
+        rows.append((row_style, "\n"))
     remaining = len(suggestions) - (scroll_offset + len(visible))
     if remaining > 0:
         rows.extend(
@@ -515,6 +612,37 @@ def _render_slash_menu_fragments(
     elif rows:
         rows.pop()
     return rows
+
+
+def _render_slash_option_fragments(
+    command: str,
+    *,
+    command_options: Mapping[str, tuple[str, ...]],
+    option_indexes: Mapping[str, int],
+    current: bool,
+) -> list[tuple[str, str]]:
+    options = command_options.get(command, ())
+    if not options:
+        return []
+    selected_idx = max(0, min(option_indexes.get(command, 0), len(options) - 1))
+    fragments: list[tuple[str, str]] = [("class:slash-menu.meta.current" if current else "class:slash-menu.meta", "  ")]
+    for idx, option in enumerate(options):
+        selected = idx == selected_idx
+        style = (
+            "class:slash-menu.option.selected.current"
+            if current and selected
+            else "class:slash-menu.option.selected"
+            if selected
+            else "class:slash-menu.option.current"
+            if current
+            else "class:slash-menu.option"
+        )
+        if idx > 0:
+            fragments.append(("class:slash-menu.meta.current" if current else "class:slash-menu.meta", " "))
+        left = "<" if current and selected else " "
+        right = ">" if current and selected else " "
+        fragments.append((style, f"{left}{option}{right}"))
+    return fragments
 
 
 def _build_rounded_input_frame(body):
@@ -574,6 +702,10 @@ def build_input_box_style_map() -> dict[str, str]:
         "slash-menu.command.current": "bg:#374151 fg:#ffffff bold",
         "slash-menu.meta": "bg:#111827 fg:#9ca3af",
         "slash-menu.meta.current": "bg:#374151 fg:#e5e7eb",
+        "slash-menu.option": "bg:#111827 fg:#d1d5db",
+        "slash-menu.option.current": "bg:#374151 fg:#e5e7eb",
+        "slash-menu.option.selected": "bg:#1f2937 fg:#f97316 bold",
+        "slash-menu.option.selected.current": "bg:#f97316 fg:#111827 bold",
     }
 
 
