@@ -1,0 +1,25 @@
+# Audax runtime dependencies.
+#
+# Install with:
+#     pip install -r requirements.txt
+#
+# Audax targets Python 3.10+ (see pyproject.toml for the authoritative spec).
+
+prompt_toolkit>=3.0
+
+# ---------------------------------------------------------------------------
+# External CLI prerequisites (NOT pip-installable)
+# ---------------------------------------------------------------------------
+# Audax does not call the Anthropic or OpenAI APIs directly. It shells out to
+# two command-line tools that must be installed, authenticated, and on PATH:
+#
+#     claude   - Claude Code CLI   (implementer role, default)
+#     codex    - OpenAI Codex CLI  (reviewer role, default)
+#
+# See README.md > Prerequisites for installation details.
+#
+# ---------------------------------------------------------------------------
+# Optional development extras (declared in pyproject.toml)
+# ---------------------------------------------------------------------------
+#     pip install -e ".[test]"   # pytest, for the unit test suite
+#     pip install -e ".[docs]"   # Sphinx + theme, to build the docs site

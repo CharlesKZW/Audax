@@ -11,6 +11,12 @@ Audax Documentation
    loop into one long-running, structured session and tries to make
    audacious work reliable by construction rather than by hope.
 
+.. tip::
+
+   **New here?** Start with :doc:`the pitch <pitch>` — the finance problem
+   Audax solves, how the build-review loop works, and why the prototype is
+   more than a mockup.
+
 At A Glance
 -----------
 
@@ -164,6 +170,7 @@ What Audax Guarantees
 .. toctree::
    :hidden:
 
+   pitch
    getting-started
    workflow
    architecture
