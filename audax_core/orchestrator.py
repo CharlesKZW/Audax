@@ -117,6 +117,7 @@ class ReviewLoopOrchestrator:
         self._streaming_assistant_prefix_pending = True
         self._streaming_assistant_markdown_buffer = ""
         self._streaming_tool_line_active = False
+        self._streaming_tool_name: str | None = None
         self.artifacts.ensure_directories()
 
     def run(self, task: str) -> RunSummary:
@@ -804,6 +805,7 @@ class ReviewLoopOrchestrator:
             self._streaming_assistant_prefix_pending = True
             self._streaming_assistant_markdown_buffer = ""
             self._streaming_tool_line_active = False
+            self._streaming_tool_name = None
             self.output_stream.write(
                 render_live_log_header(label, rich=self._streaming_rich)
             )
@@ -821,28 +823,39 @@ class ReviewLoopOrchestrator:
 
     def _format_stream_agent_text(self, text: str) -> str:
         """Apply live-log styling to Claude assistant and tool chunks."""
-        if not self._streaming_rich:
-            return text
-
         tool_match = _CLAUDE_TOOL_START_PATTERN.match(text)
         if tool_match is not None:
             flushed = self._flush_assistant_markdown_buffer()
             self._streaming_tool_line_active = True
             self._streaming_assistant_prefix_pending = True
             name = tool_match.group("name")
+            self._streaming_tool_name = name
             remainder = text[tool_match.end() :]
-            rendered = flushed + render_live_log_tool_start(name, rich=True)
+            rendered = flushed + render_live_log_tool_start(
+                name,
+                rich=self._streaming_rich,
+            )
             if remainder:
                 rendered += self._format_stream_agent_text(remainder)
             return rendered
 
         if self._streaming_tool_line_active and text.startswith(":"):
             detail = text[1:].lstrip()
+            name = self._streaming_tool_name
             self._streaming_tool_line_active = False
-            return style_live_log_tool_detail(detail, rich=True) + "\n"
+            self._streaming_tool_name = None
+            return (
+                style_live_log_tool_detail(
+                    detail,
+                    rich=self._streaming_rich,
+                    tool_name=name,
+                )
+                + "\n"
+            )
 
         if self._streaming_tool_line_active:
             self._streaming_tool_line_active = False
+            self._streaming_tool_name = None
             separator = "" if text.startswith("\n") else "\n"
             return separator + self._format_assistant_text(text)
 
@@ -884,9 +897,11 @@ class ReviewLoopOrchestrator:
             if not part:
                 continue
             if self._streaming_assistant_prefix_pending:
-                rendered.append(live_log_assistant_prefix(rich=True))
+                rendered.append(live_log_assistant_prefix(rich=self._streaming_rich))
                 self._streaming_assistant_prefix_pending = False
-            rendered.append(style_live_log_assistant_text(part, rich=True))
+            rendered.append(
+                style_live_log_assistant_text(part, rich=self._streaming_rich)
+            )
         return "".join(rendered)
 
     def _lock_current_contract(

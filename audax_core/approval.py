@@ -7,12 +7,45 @@ import sys
 from typing import TextIO
 
 from .models import ApprovalDecision, MissionReview
-from .ui import render_mission_approval_card
+from .ui import read_task_interactive, render_mission_approval_card, supports_rich_terminal
 
 
 def _normalize_response(response: str) -> str:
     """Collapse whitespace and punctuation variants in approval responses."""
     return " ".join(response.strip().lower().replace("-", " ").split())
+
+
+def _stdin_is_tty() -> bool:
+    """Return whether stdin is attached to an interactive terminal."""
+    isatty = getattr(sys.stdin, "isatty", None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except (OSError, ValueError):
+        return False
+
+
+def _read_requested_changes(target: TextIO) -> str:
+    """Read human feedback for a rejected mission spec."""
+    if supports_rich_terminal(target) and _stdin_is_tty():
+        target.write("Enter requested changes for the mission spec.\n")
+        target.write("Press Enter to submit · Option+Enter inserts a new line.\n")
+        target.flush()
+        return read_task_interactive(stream=target).strip()
+
+    target.write("Enter requested changes. Submit an empty line to finish.\n")
+    target.flush()
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            line = ""
+        if not line:
+            break
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def interactive_mission_approval(
@@ -58,18 +91,7 @@ def interactive_mission_approval(
             "no",
             "n",
         }:
-            target.write("Enter requested changes. Submit an empty line to finish.\n")
-            target.flush()
-            lines: list[str] = []
-            while True:
-                try:
-                    line = input()
-                except EOFError:
-                    line = ""
-                if not line:
-                    break
-                lines.append(line)
-            feedback = "\n".join(lines).strip()
+            feedback = _read_requested_changes(target)
             if feedback:
                 return ApprovalDecision(approved=False, feedback=feedback)
             target.write("Requested changes were empty.\n")

@@ -11,3 +11,17 @@ venv/
 docs/_build/
 audax_artifacts/
 .DS_Store
+
+# Eval course materials: the GenAIFin/FinMathML homeworks contain secrets
+# (.env files) and large virtualenvs — never commit them. The benchmark we
+# built (tasks, rubrics, runner, results, report) is the deliverable and stays
+# tracked via the negation below.
+/Evals/*
+!/Evals/benchmark/
+
+# Audax benchmark scratch run dirs (these live outside the repo by default).
+audax_bench/
+
+# Belt-and-suspenders: never commit secrets.
+.env
+*.env

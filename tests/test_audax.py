@@ -1860,6 +1860,37 @@ def test_interactive_mission_approval_accepts_request_changes_literal(
     assert result == ApprovalDecision(approved=False, feedback="Add rollback instructions.")
 
 
+def test_interactive_mission_approval_uses_framed_input_for_request_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(["request changes"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    monkeypatch.setattr("audax_core.approval.supports_rich_terminal", lambda stream: True)
+    monkeypatch.setattr("audax_core.approval._stdin_is_tty", lambda: True)
+
+    calls: list[dict[str, object]] = []
+
+    def fake_read_task_interactive(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return "Keep optimization scoped to this codebase."
+
+    monkeypatch.setattr(
+        "audax_core.approval.read_task_interactive",
+        fake_read_task_interactive,
+    )
+    stream = io.StringIO()
+
+    result = interactive_mission_approval("spec", Path("mission_spec.md"), stream=stream)
+
+    assert result == ApprovalDecision(
+        approved=False,
+        feedback="Keep optimization scoped to this codebase.",
+    )
+    assert calls == [{"stream": stream}]
+    assert "Enter requested changes for the mission spec." in stream.getvalue()
+    assert "Submit an empty line" not in stream.getvalue()
+
+
 def test_interactive_mission_approval_treats_no_as_request_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2830,6 +2861,34 @@ def test_orchestrator_rich_live_log_distinguishes_tools_and_assistant(
     assert "Bash" in plain
     assert "pytest tests/test_audax.py" in plain
     assert "Claude  done." in plain
+
+
+def test_orchestrator_plain_live_log_distinguishes_tools_and_assistant(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path
+    artifacts = MissionArtifacts.from_workspace(repo_root / DEFAULT_WORKSPACE_DIR)
+    output = io.StringIO()
+    orchestrator = ReviewLoopOrchestrator(
+        config=make_config(repo_root),
+        artifacts=artifacts,
+        claude=FakeClaude(["done"]),
+        codex=FakeCodex([]),
+        output_stream=output,
+    )
+
+    orchestrator._stream_agent_text("Reading repository... ", label="implementation round 1")
+    orchestrator._stream_agent_text("\n[Bash] ", label="implementation round 1")
+    orchestrator._stream_agent_text(": pytest tests/test_audax.py", label="implementation round 1")
+    orchestrator._stream_agent_text("done.", label="implementation round 1")
+    orchestrator._finalize_streaming()
+
+    rendered = output.getvalue()
+
+    assert "Claude live work log: implementation round 1" in rendered
+    assert "  Claude  Reading repository..." in rendered
+    assert "  Tool    Bash  $ pytest tests/test_audax.py" in rendered
+    assert "  Claude  done." in rendered
 
 
 def test_orchestrator_rich_live_log_renders_inline_markdown_across_chunks(

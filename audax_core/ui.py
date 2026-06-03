@@ -826,7 +826,7 @@ def render_live_log_footer(*, rich: bool) -> str:
 def live_log_assistant_prefix(*, rich: bool) -> str:
     """Return the left gutter for streamed assistant text."""
     if not rich:
-        return ""
+        return "  Claude  "
     return (
         "  "
         + _style("Claude", LIVE_LOG_ASSISTANT_LABEL_ANSI, color=True)
@@ -896,16 +896,30 @@ def _render_live_log_inline_markdown(text: str) -> str:
 def render_live_log_tool_start(name: str, *, rich: bool) -> str:
     """Render the left gutter for a Claude tool-use line."""
     if not rich:
-        return f"\n[{name}] "
+        return f"\n  Tool    {name}  "
     badge = _style(f" {name} ", LIVE_LOG_TOOL_LABEL_ANSI, color=True)
     return f"\n  {badge} "
 
 
-def style_live_log_tool_detail(text: str, *, rich: bool) -> str:
+def style_live_log_tool_detail(
+    text: str,
+    *,
+    rich: bool,
+    tool_name: str | None = None,
+) -> str:
     """Style a one-line Claude tool-use summary."""
+    if _is_shell_tool(tool_name) and text:
+        text = f"$ {text}"
     if not rich:
         return text
     return _style(text, LIVE_LOG_TOOL_DETAIL_ANSI, color=True)
+
+
+def _is_shell_tool(name: str | None) -> bool:
+    """Return whether a Claude tool name represents shell command execution."""
+    if name is None:
+        return False
+    return name.strip().lower() in {"bash", "shell"}
 
 
 def _card_width() -> int:
